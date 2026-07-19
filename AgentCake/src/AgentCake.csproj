@@ -16,6 +16,12 @@
     <!-- System.Text.Json ships in the shared framework, so no NuGet restore is needed. -->
   </PropertyGroup>
 
+  <ItemGroup>
+    <Content Include="assets\\agentcake-profile.png">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
+  </ItemGroup>
+
   <!-- For a single-file publish, see the README (uses dotnet publish with PublishSingleFile). -->
 
 </Project>

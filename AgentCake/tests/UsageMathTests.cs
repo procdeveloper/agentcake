@@ -15,13 +15,13 @@ public class UsageParserTests
     }
 
     [Fact]
-    public void Claude_uses_the_seven_day_status_limit()
+    public void Claude_Desktop_uses_the_latest_seven_day_sample()
     {
-        const string json = """{ "rate_limits": { "five_hour": { "used_percentage": 11 }, "seven_day": { "used_percentage": 83, "resets_at": "2026-07-22T12:00:00Z" } } }""";
-        Assert.True(UsageParsers.TryParseClaudeWeekly(json, out var usage));
+        const string json = """{ "version": 2, "samples": [{ "t": 1784447000000, "u": { "fh": 11, "sd": 83 } }, { "t": 1784447300000, "u": { "fh": 15, "sd": 84 } }] }""";
+        Assert.True(UsageParsers.TryParseClaudeDesktopWeekly(json, out var usage));
         Assert.Equal("Claude", usage.Service);
-        Assert.Equal(83, usage.UsedPercent);
-        Assert.Equal(17, usage.RemainingPercent);
-        Assert.NotNull(usage.ResetsAt);
+        Assert.Equal(84, usage.UsedPercent);
+        Assert.Equal(16, usage.RemainingPercent);
+        Assert.Null(usage.ResetsAt);
     }
 }

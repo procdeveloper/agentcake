@@ -12,7 +12,7 @@ public sealed class UsageReader
     public UsageSnapshot Scan()
     {
         var cfg = _settings();
-        return new UsageSnapshot(ReadCodex(cfg.ResolveCodexSessionsDir()), ReadClaude(cfg.ResolveClaudeStatusPath()), DateTime.Now);
+        return new UsageSnapshot(ReadCodex(cfg.ResolveCodexSessionsDir()), ReadClaudeDesktop(cfg.ResolveClaudeDesktopUsagePath()), DateTime.Now);
     }
 
     private static ServiceUsage ReadCodex(string sessionsDir)
@@ -40,20 +40,20 @@ public sealed class UsageReader
         return ServiceUsage.Unavailable("Codex", "No live weekly rate-limit record has been written yet.");
     }
 
-    private static ServiceUsage ReadClaude(string statusPath)
+    private static ServiceUsage ReadClaudeDesktop(string historyPath)
     {
-        if (!File.Exists(statusPath))
-            return ServiceUsage.Unavailable("Claude", "No Claude status payload yet. Run Install-ClaudeStatusHook.ps1, then use Claude Code once.");
+        if (!File.Exists(historyPath))
+            return ServiceUsage.Unavailable("Claude", "Claude Desktop plan-usage history was not found. Open Claude Desktop and sign in.");
 
         try
         {
-            return UsageParsers.TryParseClaudeWeekly(File.ReadAllText(statusPath), out var usage)
+            return UsageParsers.TryParseClaudeDesktopWeekly(File.ReadAllText(historyPath), out var usage)
                 ? usage
-                : ServiceUsage.Unavailable("Claude", "The latest Claude status payload has no weekly limit.");
+                : ServiceUsage.Unavailable("Claude", "Claude Desktop has not recorded a weekly usage value yet.");
         }
         catch
         {
-            return ServiceUsage.Unavailable("Claude", "Claude status payload is being updated; retrying shortly.");
+            return ServiceUsage.Unavailable("Claude", "Claude Desktop usage history is being updated; retrying shortly.");
         }
     }
 
@@ -104,21 +104,22 @@ public static class UsageParsers
         catch { return false; }
     }
 
-    public static bool TryParseClaudeWeekly(string json, out ServiceUsage usage)
+    public static bool TryParseClaudeDesktopWeekly(string json, out ServiceUsage usage)
     {
-        usage = ServiceUsage.Unavailable("Claude", "No live weekly limit.");
+        usage = ServiceUsage.Unavailable("Claude", "No Claude Desktop weekly limit.");
         try
         {
             using var doc = JsonDocument.Parse(json);
-            var limits = FindNamedObject(doc.RootElement, "rate_limits") ?? FindNamedObject(doc.RootElement, "rate_limit");
-            if (limits is null) return false;
+            if (!doc.RootElement.TryGetProperty("samples", out var samples) || samples.ValueKind != JsonValueKind.Array)
+                return false;
 
-            foreach (var name in new[] { "seven_day", "weekly", "secondary" })
+            for (var index = samples.GetArrayLength() - 1; index >= 0; index--)
             {
-                if (limits.Value.TryGetProperty(name, out var weekly) && weekly.ValueKind == JsonValueKind.Object
-                    && (TryNumber(weekly, "used_percentage", out var used) || TryNumber(weekly, "used_percent", out used)))
+                var sample = samples[index];
+                if (sample.TryGetProperty("u", out var usageValues) && usageValues.ValueKind == JsonValueKind.Object
+                    && TryNumber(usageValues, "sd", out var used))
                 {
-                    usage = new ServiceUsage("Claude", used, ReadReset(weekly), "Live Claude Code status limit");
+                    usage = new ServiceUsage("Claude", used, null, "Live Claude Desktop plan usage");
                     return true;
                 }
             }
