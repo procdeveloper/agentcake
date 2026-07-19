@@ -1,38 +1,79 @@
-# AgentCake
+<p align="center">
+  <img src="AgentCake/src/assets/agentcake-profile.png" width="180" alt="AgentCake's scheming agent mascot holding a birthday cake">
+</p>
 
-A Windows notification-area widget for your **real weekly remaining usage** in Codex and Claude Code.
+<h1 align="center">AgentCake</h1>
 
-The tray icon has two stacked percentage rows: Codex on top and Claude below. Each row shows the weekly percentage remaining over a used-progress background:
+<p align="center">A Windows tray companion for real Codex and Claude usage limits.</p>
 
-- normal below 65% used
-- yellow from 65% used
-- light pink/red from 80% used
+## What it is
 
-Hover for service names and percentages; double-click for reset details.
+AgentCake lives in the Windows notification area and shows the weekly usage you actually have left. It reads local, live account-limit data written by Codex and Claude Desktop; it does not estimate from token counts, scrape conversations, use an API key, or send your data anywhere.
+
+Click the tray portrait once to open Details. The Details view has a prominent AgentCake portrait, service icons, current usage text, and compact pie charts. Click a service row to launch that agent.
+
+## Done
+
+- Real Codex weekly-limit reading from `%USERPROFILE%\.codex\sessions`.
+- Real Claude Desktop weekly plan-usage reading from its local app data.
+- AgentCake portrait tray icon, with optional stacked usage bars.
+- Green, yellow, and pink/red thresholds at 65% and 80% used.
+- Details window beside the tray, with service icons, pie charts, refresh control, and a prominent mascot header.
+- One-click launch for Codex and Claude Desktop.
+- Optional Claude Code row that opens Command Prompt and runs `claude`.
+- Provider visibility switches saved in `%APPDATA%\AgentCake\settings.json`.
+- Current-user **Run at login** option.
+
+## Not done yet
+
+- Real usage readers for Claude Code, ChatGPT, Gemini, GitHub Copilot, Cursor, OpenRouter, and custom providers. Their switches are placeholders only; AgentCake will never invent a usage value.
+- A packaged installer and self-contained release build. Development currently runs from the built executable.
+- A reliable reset timestamp for Claude Desktop—the local history currently provides the weekly percentage, but not its reset time.
+
+## Use it
+
+1. Build and run it:
+
+   ```powershell
+   cd AgentCake
+   dotnet test tests\AgentCake.Tests.csproj
+   dotnet run --project src\AgentCake.csproj
+   ```
+
+2. Single-left-click the tray portrait for Details; right-click it for the menu.
+3. Use **Providers** to hide services you do not use, enable placeholders, or enable **Show usage bars in tray**.
+4. Use **Run at login** when you are happy with the development build location.
 
 ## Data sources
 
-- **Codex**: local live `rate_limits` events in `%USERPROFILE%\.codex\sessions`.
-- **Claude Code**: a local `statusLine` hook writes Claude's live status payload to `%APPDATA%\AgentCake\claude-status.json`.
+- **Codex:** live `rate_limits` events in `%USERPROFILE%\.codex\sessions`.
+- **Claude Desktop:** `%LOCALAPPDATA%\Packages\Claude_pzs8sxrjxfjjc\LocalCache\Roaming\Claude\plan-usage-history.json`.
 
-No token-estimation, transcript accounting, API key, or network request is used.
+Open Claude Desktop while signed in at least once so it writes the plan-usage sample.
 
-## Install Claude capture
+## Provider settings
 
-Run once from PowerShell:
+The tray menu writes `%APPDATA%\AgentCake\settings.json`. The relevant section looks like this:
 
-```powershell
-.\Install-ClaudeStatusHook.ps1
+```json
+{
+  "showUsageBarsInTray": false,
+  "providers": {
+    "codex": true,
+    "claudeDesktop": true,
+    "claudeCode": false,
+    "chatGpt": false,
+    "gemini": false,
+    "gitHubCopilot": false,
+    "cursor": false,
+    "openRouter": false,
+    "customProvider": false
+  }
+}
 ```
 
-It copies the hook into `%USERPROFILE%\.claude` and repairs/configures Claude Code's `statusLine` setting. If the existing settings file is invalid JSON, it is backed up before replacement.
+Turning off Codex or Claude Desktop removes it from Details and from tray-bar mode. Claude Code can be shown as a launcher row; the remaining entries are saved placeholders for future data readers.
 
-## Build
+## License
 
-```powershell
-cd AgentCake
-dotnet test tests\AgentCake.Tests.csproj
-dotnet run --project src\AgentCake.csproj
-```
-
-Use the tray menu to enable **Run at login**.
+[MIT](LICENSE)

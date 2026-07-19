@@ -1,6 +1,6 @@
 # AgentCake
 
-A Windows notification-area widget for your **real weekly remaining usage** in Codex and Claude Code.
+A Windows notification-area widget for your **real weekly remaining usage** in Codex and Claude Desktop.
 
 The tray icon has two stacked percentage rows: Codex on top and Claude below. Each row shows the weekly percentage remaining over a used-progress background:
 
@@ -13,19 +13,11 @@ Hover for service names and percentages; double-click for reset details.
 ## Data sources
 
 - **Codex**: local live `rate_limits` events in `%USERPROFILE%\.codex\sessions`.
-- **Claude Code**: a local `statusLine` hook writes Claude's live status payload to `%APPDATA%\AgentCake\claude-status.json`.
+- **Claude Desktop**: its locally maintained plan-usage history at `%LOCALAPPDATA%\Packages\Claude_pzs8sxrjxfjjc\LocalCache\Roaming\Claude\plan-usage-history.json`.
 
 No token-estimation, transcript accounting, API key, or network request is used.
 
-## Install Claude capture
-
-Run once from PowerShell:
-
-```powershell
-.\Install-ClaudeStatusHook.ps1
-```
-
-It copies the hook into `%USERPROFILE%\.claude` and repairs/configures Claude Code's `statusLine` setting. If the existing settings file is invalid JSON, it is backed up before replacement.
+Open Claude Desktop while signed in at least once; it writes the weekly plan-usage sample AgentCake reads. No Claude Code hook is needed.
 
 ## Build
 

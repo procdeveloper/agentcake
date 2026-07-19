@@ -15,8 +15,11 @@ public static class IconRenderer
     private static readonly Color Warning = Color.FromArgb(241, 205, 76);
     private static readonly Color Critical = Color.FromArgb(244, 161, 174);
 
-    public static Icon Render(ServiceUsage codex, ServiceUsage claude, int size = 32)
+    public static Icon Render(ServiceUsage codex, ServiceUsage claude, int size = 32) => Render(new[] { codex, claude }, size);
+
+    public static Icon Render(IEnumerable<ServiceUsage> services, int size = 32)
     {
+        var visible = services.Take(2).ToArray();
         using var bitmap = new Bitmap(size, size);
         using (var graphics = Graphics.FromImage(bitmap))
         {
@@ -24,9 +27,16 @@ public static class IconRenderer
             graphics.TextRenderingHint = TextRenderingHint.AntiAliasGridFit;
             graphics.Clear(Color.Transparent);
             int gap = Math.Max(1, size / 16);
-            int rowHeight = (size - gap * 3) / 2;
-            DrawRow(graphics, new Rectangle(gap, gap, size - gap * 2, rowHeight), codex);
-            DrawRow(graphics, new Rectangle(gap, gap * 2 + rowHeight, size - gap * 2, rowHeight), claude);
+            if (visible.Length == 1)
+            {
+                DrawRow(graphics, new Rectangle(gap, gap, size - gap * 2, size - gap * 2), visible[0]);
+            }
+            else
+            {
+                int rowHeight = (size - gap * 3) / 2;
+                for (int index = 0; index < visible.Length; index++)
+                    DrawRow(graphics, new Rectangle(gap, gap + index * (rowHeight + gap), size - gap * 2, rowHeight), visible[index]);
+            }
         }
         IntPtr handle = bitmap.GetHicon();
         using var temporary = Icon.FromHandle(handle);
