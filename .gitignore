@@ -1,0 +1,6 @@
+# Build output
+**/bin/
+**/obj/
+
+# Local project scratchpad
+JS/convo.txt
