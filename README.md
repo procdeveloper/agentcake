@@ -12,7 +12,7 @@
 
 AgentCake lives in the Windows notification area and shows the weekly usage you actually have left. It reads local, live account-limit data written by Codex and Claude Desktop; it does not estimate from token counts, scrape conversations, use an API key, or send your data anywhere.
 
-Click the tray portrait once to open Details. The Details view has a prominent AgentCake portrait, service icons, current usage text, and compact pie charts. Click a service row to launch that agent.
+Click the tray portrait once to open Details. The Details view has an AgentCake portrait, service icons, current usage text, and compact pie charts. Click a service row to launch that agent.
 
 ## Done
 
@@ -26,7 +26,7 @@ Click the tray portrait once to open Details. The Details view has a prominent A
 - Provider visibility switches saved in `%APPDATA%\AgentCake\settings.json`.
 - Current-user **Run at login** option.
 
-## Not done yet
+## What's missing
 
 - Real usage readers for Claude Code, ChatGPT, Gemini, GitHub Copilot, Cursor, OpenRouter, and custom providers. Their switches are placeholders only; AgentCake will never invent a usage value.
 - A packaged installer and self-contained release build. Development currently runs from the built executable.
