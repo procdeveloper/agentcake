@@ -4,7 +4,9 @@
 
 <h1 align="center">AgentCake</h1>
 
-<p align="center">A Windows tray companion for real Codex and Claude usage limits.</p>
+<p align="center">A Windows tray companion for real time AI Agent token usage monitoring</p>
+
+<p align="center">Codex and Claude usage limits implemented</p>
 
 ## What it is
 
@@ -43,6 +45,16 @@ Click the tray portrait once to open Details. The Details view has a prominent A
 2. Single-left-click the tray portrait for Details; right-click it for the menu.
 3. Use **Providers** to hide services you do not use, enable placeholders, or enable **Show usage bars in tray**.
 4. Use **Run at login** when you are happy with the development build location.
+
+## Release and install
+
+Build a self-contained Windows x64 release—no separate .NET installation required:
+
+```powershell
+.\Build-Release.ps1
+```
+
+Then run `release\install.bat`. It copies AgentCake into `%LOCALAPPDATA%\AgentCake`, registers that installed executable for current-user startup, and launches it. No administrator rights are required.
 
 ## Data sources
 
