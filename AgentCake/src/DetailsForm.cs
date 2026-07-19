@@ -25,7 +25,7 @@ public sealed class DetailsForm : Form
 
     public DetailsForm(Action refresh)
     {
-        Text = "AgentCake usage";
+        Text = "AgentCake usage monitor";
         Icon = AgentCakeWindowIcon.Load();
         BackColor = Color.FromArgb(28, 30, 33);
         ForeColor = Color.White;
@@ -165,7 +165,7 @@ public sealed class DetailsForm : Form
         AutoSize = false,
         ForeColor = Color.White,
         Font = new Font("Segoe UI", 12f, FontStyle.Bold),
-        Text = "AgentCake usage",
+        Text = "AgentCake usage monitor",
         TextAlign = ContentAlignment.MiddleLeft
     };
 
@@ -309,10 +309,8 @@ internal static class AgentCakeWindowIcon
 {
     public static Icon Load()
     {
-        string path = Path.Combine(AppContext.BaseDirectory, "assets", "agentcake-profile.png");
-        if (!File.Exists(path)) return SystemIcons.Application;
-
-        using var source = new Bitmap(path);
+        using var source = AgentCakePortrait.Load();
+        if (source is null) return SystemIcons.Application;
         using var scaled = new Bitmap(source, new Size(32, 32));
         IntPtr handle = scaled.GetHicon();
         try
@@ -332,10 +330,16 @@ internal static class AgentCakePortrait
     public static Bitmap? Load()
     {
         string path = Path.Combine(AppContext.BaseDirectory, "assets", "agentcake-profile.png");
-        if (!File.Exists(path)) return null;
+        if (File.Exists(path))
+        {
+            using var source = new Bitmap(path);
+            return new Bitmap(source);
+        }
 
-        using var source = new Bitmap(path);
-        return new Bitmap(source);
+        using var stream = typeof(AgentCakePortrait).Assembly.GetManifestResourceStream("AgentCake.assets.agentcake-profile.png");
+        if (stream is null) return null;
+        using var embedded = new Bitmap(stream);
+        return new Bitmap(embedded);
     }
 }
 

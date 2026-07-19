@@ -20,6 +20,7 @@
     <Content Include="assets\\agentcake-profile.png">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </Content>
+    <EmbeddedResource Include="assets\\agentcake-profile.png" />
   </ItemGroup>
 
   <!-- For a single-file publish, see the README (uses dotnet publish with PublishSingleFile). -->
