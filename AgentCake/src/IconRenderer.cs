@@ -1,93 +1,60 @@
 using System.Drawing;
 using System.Drawing.Drawing2D;
+using System.Drawing.Text;
 using System.Runtime.InteropServices;
 
 namespace AgentCake;
 
-/// <summary>
-/// Builds the tray glyph at runtime: two vertical fill bars — left = current 5-hour window,
-/// right = this week. The notification area only shows an icon (not text), so we draw the bars
-/// into a bitmap and convert to an HICON each refresh (the trick battery/CPU meters use).
-/// </summary>
 public static class IconRenderer
 {
     [DllImport("user32.dll", SetLastError = true)]
     private static extern bool DestroyIcon(IntPtr handle);
 
-    private static readonly Color Green = Color.FromArgb(0x39, 0xD3, 0x53);
-    private static readonly Color Amber = Color.FromArgb(0xF5, 0xB8, 0x2E);
-    private static readonly Color Red   = Color.FromArgb(0xF0, 0x4A, 0x3A);
-    private static readonly Color Track = Color.FromArgb(0x55, 0xFF, 0xFF, 0xFF);
+    private static readonly Color Track = Color.FromArgb(42, 45, 48);
+    private static readonly Color Normal = Color.FromArgb(65, 150, 100);
+    private static readonly Color Warning = Color.FromArgb(241, 205, 76);
+    private static readonly Color Critical = Color.FromArgb(244, 161, 174);
 
-    private static Color ColorFor(double f) => f >= 0.85 ? Red : f >= 0.60 ? Amber : Green;
-
-    /// <summary>Render the two-bar gauge. Fractions are 0..1+ (clamped to full when drawing).</summary>
-    public static Icon Render(double f5h, double fWeek, int size = 32)
+    public static Icon Render(ServiceUsage codex, ServiceUsage claude, int size = 32)
     {
-        using var bmp = new Bitmap(size, size);
-        using (var g = Graphics.FromImage(bmp))
+        using var bitmap = new Bitmap(size, size);
+        using (var graphics = Graphics.FromImage(bitmap))
         {
-            g.SmoothingMode = SmoothingMode.AntiAlias;
-            g.Clear(Color.Transparent);
-
-            float top = size * 0.12f;
-            float bottom = size * 0.88f;
-            float full = bottom - top;
-            float barW = size * 0.30f;
-            float gap = size * 0.16f;
-            float side = (size - 2 * barW - gap) / 2f;
-
-            DrawBar(g, side, top, barW, full, f5h);
-            DrawBar(g, side + barW + gap, top, barW, full, fWeek);
+            graphics.SmoothingMode = SmoothingMode.None;
+            graphics.TextRenderingHint = TextRenderingHint.AntiAliasGridFit;
+            graphics.Clear(Color.Transparent);
+            int gap = Math.Max(1, size / 16);
+            int rowHeight = (size - gap * 3) / 2;
+            DrawRow(graphics, new Rectangle(gap, gap, size - gap * 2, rowHeight), codex);
+            DrawRow(graphics, new Rectangle(gap, gap * 2 + rowHeight, size - gap * 2, rowHeight), claude);
         }
-
-        IntPtr hIcon = bmp.GetHicon();
-        using var tmp = Icon.FromHandle(hIcon);
-        var icon = (Icon)tmp.Clone();
-        DestroyIcon(hIcon);               // free the transient HICON immediately
+        IntPtr handle = bitmap.GetHicon();
+        using var temporary = Icon.FromHandle(handle);
+        var icon = (Icon)temporary.Clone();
+        DestroyIcon(handle);
         return icon;
     }
 
-    private static void DrawBar(Graphics g, float x, float top, float w, float full, double frac)
+    private static void DrawRow(Graphics graphics, Rectangle row, ServiceUsage usage)
     {
-        float radius = w * 0.45f;
-
-        // faint full-height track
-        using (var trackBrush = new SolidBrush(Track))
-            FillRounded(g, trackBrush, x, top, w, full, radius);
-
-        double f = Math.Clamp(frac, 0, 1);
-        if (f <= 0.001) return;
-
-        float fillH = (float)(full * f);
-        float y = top + (full - fillH);
-        using var fillBrush = new SolidBrush(ColorFor(frac));
-        FillRounded(g, fillBrush, x, y, w, fillH, Math.Min(radius, fillH / 2f));
-    }
-
-    private static void FillRounded(Graphics g, Brush brush, float x, float y, float w, float h, float r)
-    {
-        if (h <= 0 || w <= 0) return;
-        r = Math.Max(0, Math.Min(r, Math.Min(w, h) / 2f));
-        using var path = new GraphicsPath();
-        if (r <= 0.5f)
+        using var track = new SolidBrush(Track);
+        graphics.FillRectangle(track, row);
+        if (usage.UsedPercent is { } used)
         {
-            path.AddRectangle(new RectangleF(x, y, w, h));
+            int width = (int)Math.Round(row.Width * Math.Clamp(used / 100d, 0d, 1d));
+            using var fill = new SolidBrush(used >= 80 ? Critical : used >= 65 ? Warning : Normal);
+            graphics.FillRectangle(fill, new Rectangle(row.X, row.Y, width, row.Height));
         }
-        else
-        {
-            float d = r * 2;
-            path.AddArc(x, y, d, d, 180, 90);
-            path.AddArc(x + w - d, y, d, d, 270, 90);
-            path.AddArc(x + w - d, y + h - d, d, d, 0, 90);
-            path.AddArc(x, y + h - d, d, d, 90, 90);
-            path.CloseFigure();
-        }
-        g.FillPath(brush, path);
-    }
 
-    public static void DestroyHandle(IntPtr handle)
-    {
-        if (handle != IntPtr.Zero) DestroyIcon(handle);
+        string label = usage.RemainingPercent is { } remaining ? $"{remaining}%" : "--";
+        float fontSize = row.Height >= 13 ? 9f : 7f;
+        using var font = new Font("Segoe UI", fontSize, FontStyle.Bold, GraphicsUnit.Pixel);
+        var measured = graphics.MeasureString(label, font);
+        float x = row.X + (row.Width - measured.Width) / 2f;
+        float y = row.Y + (row.Height - measured.Height) / 2f - 1f;
+        using var shadow = new SolidBrush(Color.FromArgb(130, Color.Black));
+        using var text = new SolidBrush(Color.White);
+        graphics.DrawString(label, font, shadow, x + 1, y + 1);
+        graphics.DrawString(label, font, text, x, y);
     }
 }
