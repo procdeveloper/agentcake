@@ -1,206 +1,171 @@
-using System.IO;
 using System.Text;
 using System.Text.Json;
 
 namespace AgentCake;
 
-/// <summary>
-/// Reads Claude Code transcript logs (~/.claude/projects/**/*.jsonl) incrementally and rolls
-/// them into a <see cref="UsageSnapshot"/>: tokens in the current 5-hour window and tokens
-/// since the weekly reset. No Node/ccusage needed — it parses the same files ccusage does.
-/// Not thread-safe; call <see cref="Scan"/> from a single background worker.
-/// The block/reset math lives in <see cref="UsageMath"/> (unit-tested separately).
-/// </summary>
 public sealed class UsageReader
 {
-    private const int RetentionDays = 8;             // enough for a full weekly window + slack
-
     private readonly Func<AppSettings> _settings;
-    private readonly Dictionary<string, long> _offsets = new(StringComparer.OrdinalIgnoreCase);
-    private readonly HashSet<string> _seen = new();
-    private readonly List<(UsageRecord Rec, string? Key)> _records = new();
 
     public UsageReader(Func<AppSettings> settings) => _settings = settings;
 
-    public string ResolveDataDir()
-    {
-        var s = _settings();
-        if (!string.IsNullOrWhiteSpace(s.ClaudeDirOverride))
-            return s.ClaudeDirOverride;
-        var home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
-        return Path.Combine(home, ".claude");
-    }
-
     public UsageSnapshot Scan()
     {
-        var settings = _settings();
-        string root = ResolveDataDir();
-        string projects = Path.Combine(root, "projects");
-        bool exists = Directory.Exists(projects);
-
-        if (exists)
-        {
-            foreach (var file in EnumerateJsonl(projects))
-            {
-                try { ReadAppended(file); }
-                catch { /* skip locked/unreadable file this pass */ }
-            }
-        }
-
-        Prune();
-        return Aggregate(settings, root, exists);
+        var cfg = _settings();
+        return new UsageSnapshot(ReadCodex(cfg.ResolveCodexSessionsDir()), ReadClaude(cfg.ResolveClaudeStatusPath()), DateTime.Now);
     }
 
-    private static IEnumerable<string> EnumerateJsonl(string dir)
+    private static ServiceUsage ReadCodex(string sessionsDir)
     {
-        try { return Directory.EnumerateFiles(dir, "*.jsonl", SearchOption.AllDirectories); }
-        catch { return Array.Empty<string>(); }
-    }
+        if (!Directory.Exists(sessionsDir))
+            return ServiceUsage.Unavailable("Codex", "Codex session folder was not found.");
 
-    private void ReadAppended(string path)
-    {
-        long start = _offsets.TryGetValue(path, out var o) ? o : 0L;
-
-        using var fs = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
-        if (fs.Length < start) start = 0;          // truncated/rotated -> re-read
-
-        if (fs.Length == start) { _offsets[path] = start; return; }
-
-        fs.Seek(start, SeekOrigin.Begin);
-        using var reader = new StreamReader(fs, Encoding.UTF8, detectEncodingFromByteOrderMarks: false);
-
-        string? line;
-        while ((line = reader.ReadLine()) != null)
-        {
-            if (line.Length == 0) continue;
-            ParseLine(line);
-        }
-
-        // Resume only on a clean line boundary so a half-written trailing line is re-read next pass.
-        _offsets[path] = SafeOffset(fs);
-    }
-
-    private static long SafeOffset(FileStream fs)
-    {
-        long len = fs.Length;
-        if (len == 0) return 0;
         try
         {
-            fs.Seek(len - 1, SeekOrigin.Begin);
-            if (fs.ReadByte() == '\n') return len;
-            return LastNewlineOffset(fs, len);
+            var files = Directory.EnumerateFiles(sessionsDir, "*.jsonl", SearchOption.AllDirectories)
+                .Select(path => new FileInfo(path))
+                .OrderByDescending(file => file.LastWriteTimeUtc)
+                .Take(12);
+
+            foreach (var file in files)
+            {
+                ServiceUsage? latest = null;
+                foreach (var line in TailLines(file.FullName))
+                    if (UsageParsers.TryParseCodexWeekly(line, out var usage)) latest = usage;
+                if (latest is not null) return latest;
+            }
         }
-        catch { return len; }
+        catch { }
+
+        return ServiceUsage.Unavailable("Codex", "No live weekly rate-limit record has been written yet.");
     }
 
-    private static long LastNewlineOffset(FileStream fs, long len)
+    private static ServiceUsage ReadClaude(string statusPath)
     {
-        const int chunk = 8192;
-        long pos = len;
-        var buf = new byte[chunk];
-        while (pos > 0)
-        {
-            int read = (int)Math.Min(chunk, pos);
-            pos -= read;
-            fs.Seek(pos, SeekOrigin.Begin);
-            int n = fs.Read(buf, 0, read);
-            for (int i = n - 1; i >= 0; i--)
-                if (buf[i] == (byte)'\n') return pos + i + 1;
-        }
-        return 0;
-    }
+        if (!File.Exists(statusPath))
+            return ServiceUsage.Unavailable("Claude", "No Claude status payload yet. Run Install-ClaudeStatusHook.ps1, then use Claude Code once.");
 
-    private void ParseLine(string line)
-    {
-        UsageRecord rec;
-        string? key;
         try
         {
-            using var doc = JsonDocument.Parse(line);
-            var root = doc.RootElement;
-            if (root.ValueKind != JsonValueKind.Object) return;
-            if (!root.TryGetProperty("message", out var msg) || msg.ValueKind != JsonValueKind.Object) return;
-            if (!msg.TryGetProperty("usage", out var usage) || usage.ValueKind != JsonValueKind.Object) return;
-
-            long input = GetLong(usage, "input_tokens");
-            long output = GetLong(usage, "output_tokens");
-            long cacheCreate = GetLong(usage, "cache_creation_input_tokens");
-            long cacheRead = GetLong(usage, "cache_read_input_tokens");
-            if (input == 0 && output == 0 && cacheCreate == 0 && cacheRead == 0) return;
-
-            string model = msg.TryGetProperty("model", out var mEl) && mEl.ValueKind == JsonValueKind.String
-                ? mEl.GetString() ?? "" : "";
-
-            if (!root.TryGetProperty("timestamp", out var tEl) || tEl.ValueKind != JsonValueKind.String
-                || !DateTimeOffset.TryParse(tEl.GetString(), out var dto))
-                return;                              // can't time-bucket without a timestamp
-
-            string? id = msg.TryGetProperty("id", out var idEl) && idEl.ValueKind == JsonValueKind.String
-                ? idEl.GetString() : null;
-            string? reqId = root.TryGetProperty("requestId", out var rEl) && rEl.ValueKind == JsonValueKind.String
-                ? rEl.GetString()
-                : (root.TryGetProperty("uuid", out var uEl) && uEl.ValueKind == JsonValueKind.String ? uEl.GetString() : null);
-            key = id is null ? null : $"{id}|{reqId}";
-
-            rec = new UsageRecord(dto.LocalDateTime, model, input, output, cacheCreate, cacheRead);
+            return UsageParsers.TryParseClaudeWeekly(File.ReadAllText(statusPath), out var usage)
+                ? usage
+                : ServiceUsage.Unavailable("Claude", "The latest Claude status payload has no weekly limit.");
         }
-        catch { return; }
-
-        if (key is not null && !_seen.Add(key)) return;   // dedup (ccusage-style)
-        _records.Add((rec, key));
+        catch
+        {
+            return ServiceUsage.Unavailable("Claude", "Claude status payload is being updated; retrying shortly.");
+        }
     }
 
-    private static long GetLong(JsonElement obj, string name)
-        => obj.TryGetProperty(name, out var el) && el.ValueKind == JsonValueKind.Number && el.TryGetInt64(out var v) ? v : 0L;
-
-    private void Prune()
+    private static IEnumerable<string> TailLines(string path)
     {
-        DateTime cutoff = DateTime.Now.AddDays(-RetentionDays);
-        int write = 0;
-        for (int i = 0; i < _records.Count; i++)
+        const int maxBytes = 256 * 1024;
+        using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+        long start = Math.Max(0, stream.Length - maxBytes);
+        stream.Seek(start, SeekOrigin.Begin);
+        using var reader = new StreamReader(stream, Encoding.UTF8, detectEncodingFromByteOrderMarks: true);
+        string text = reader.ReadToEnd();
+        if (start > 0)
         {
-            var item = _records[i];
-            if (item.Rec.TimestampLocal < cutoff)
+            int firstNewline = text.IndexOf('\n');
+            text = firstNewline >= 0 ? text[(firstNewline + 1)..] : "";
+        }
+        return text.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+    }
+}
+
+public static class UsageParsers
+{
+    public static bool TryParseCodexWeekly(string json, out ServiceUsage usage)
+    {
+        usage = ServiceUsage.Unavailable("Codex", "No live weekly limit.");
+        try
+        {
+            using var doc = JsonDocument.Parse(json);
+            var limits = FindNamedObject(doc.RootElement, "rate_limits");
+            if (limits is null) return false;
+
+            var candidates = new List<(JsonElement Window, double Minutes)>();
+            foreach (var name in new[] { "primary", "secondary", "weekly", "seven_day" })
             {
-                if (item.Key is not null) _seen.Remove(item.Key);
+                if (limits.Value.TryGetProperty(name, out var window) && window.ValueKind == JsonValueKind.Object && TryNumber(window, "used_percent", out _))
+                {
+                    _ = TryNumber(window, "window_minutes", out var minutes);
+                    candidates.Add((window, minutes));
+                }
             }
-            else _records[write++] = item;
+            if (candidates.Count == 0) return false;
+
+            var weekly = candidates.OrderByDescending(candidate => candidate.Minutes).First().Window;
+            if (!TryNumber(weekly, "used_percent", out var used)) return false;
+            usage = new ServiceUsage("Codex", used, ReadReset(weekly), "Live Codex account limit");
+            return true;
         }
-        if (write < _records.Count)
-            _records.RemoveRange(write, _records.Count - write);
+        catch { return false; }
     }
 
-    private UsageSnapshot Aggregate(AppSettings settings, string root, bool exists)
+    public static bool TryParseClaudeWeekly(string json, out ServiceUsage usage)
     {
-        DateTime now = DateTime.Now;
-        DateTime weekStart = UsageMath.MostRecentReset(now, settings.WeeklyResetDay, settings.WeeklyResetHour);
-
-        var week = new UsageTotals();
-        foreach (var (rec, _) in _records)
-            if (rec.TimestampLocal >= weekStart)
-                week.Add(rec);
-
-        var window = new UsageTotals();
-        DateTime? windowEnd = null;
-        var block = UsageMath.LastBlock(_records.Select(r => r.Rec.TimestampLocal));
-        if (block is { } b && now < b.EndsAt)
+        usage = ServiceUsage.Unavailable("Claude", "No live weekly limit.");
+        try
         {
-            foreach (var (rec, _) in _records)
-                if (rec.TimestampLocal >= b.FirstTs)
-                    window.Add(rec);
-            windowEnd = b.EndsAt;
+            using var doc = JsonDocument.Parse(json);
+            var limits = FindNamedObject(doc.RootElement, "rate_limits") ?? FindNamedObject(doc.RootElement, "rate_limit");
+            if (limits is null) return false;
+
+            foreach (var name in new[] { "seven_day", "weekly", "secondary" })
+            {
+                if (limits.Value.TryGetProperty(name, out var weekly) && weekly.ValueKind == JsonValueKind.Object
+                    && (TryNumber(weekly, "used_percentage", out var used) || TryNumber(weekly, "used_percent", out used)))
+                {
+                    usage = new ServiceUsage("Claude", used, ReadReset(weekly), "Live Claude Code status limit");
+                    return true;
+                }
+            }
+            return false;
         }
+        catch { return false; }
+    }
 
-        return new UsageSnapshot
+    private static JsonElement? FindNamedObject(JsonElement element, string name)
+    {
+        if (element.ValueKind == JsonValueKind.Object)
         {
-            CurrentWindow = window,
-            Week = week,
-            WindowEndsAt = windowEnd,
-            WeekStartedAt = weekStart,
-            WeekResetsAt = weekStart.AddDays(7),
-            GeneratedAt = now,
-            DataDir = root,
-            DataDirExists = exists
-        };
+            if (element.TryGetProperty(name, out var direct) && direct.ValueKind == JsonValueKind.Object) return direct.Clone();
+            foreach (var property in element.EnumerateObject())
+            {
+                var found = FindNamedObject(property.Value, name);
+                if (found is not null) return found;
+            }
+        }
+        else if (element.ValueKind == JsonValueKind.Array)
+        {
+            foreach (var item in element.EnumerateArray())
+            {
+                var found = FindNamedObject(item, name);
+                if (found is not null) return found;
+            }
+        }
+        return null;
+    }
+
+    private static bool TryNumber(JsonElement element, string name, out double value)
+    {
+        value = 0;
+        return element.TryGetProperty(name, out var property) && property.ValueKind == JsonValueKind.Number && property.TryGetDouble(out value);
+    }
+
+    private static DateTime? ReadReset(JsonElement element)
+    {
+        if (!element.TryGetProperty("resets_at", out var reset)) return null;
+        try
+        {
+            if (reset.ValueKind == JsonValueKind.Number && reset.TryGetInt64(out var unix))
+                return (unix > 100_000_000_000 ? DateTimeOffset.FromUnixTimeMilliseconds(unix) : DateTimeOffset.FromUnixTimeSeconds(unix)).LocalDateTime;
+            if (reset.ValueKind == JsonValueKind.String && DateTimeOffset.TryParse(reset.GetString(), out var parsed))
+                return parsed.LocalDateTime;
+        }
+        catch { }
+        return null;
     }
 }
