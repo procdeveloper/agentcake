@@ -83,6 +83,7 @@ public sealed class TrayAppContext : ApplicationContext
             _details.FormClosed += (_, _) => _details = null;
         }
         if (_last is not null) _details.UpdateView(_last);
+        _details.PositionNearTray();
         _details.Show();
         _details.Activate();
     }
