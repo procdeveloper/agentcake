@@ -13,7 +13,9 @@ public sealed class TrayAppContext : ApplicationContext
     private readonly NotifyIcon _tray;
     private readonly System.Windows.Forms.Timer _timer;
     private readonly Control _marshal = new();
-    private Icon? _icon;
+    private readonly Icon _portraitIcon = AgentCakeWindowIcon.Load();
+    private readonly List<Icon> _barIcons = new();
+    private string? _barIconKey;
     private int _scanning;
     private UsageSnapshot? _last;
     private DetailsForm? _details;
@@ -22,7 +24,7 @@ public sealed class TrayAppContext : ApplicationContext
     {
         _reader = new UsageReader(() => _settings);
         _ = _marshal.Handle;
-        _tray = new NotifyIcon { Visible = true, Text = "AgentCake: loading live limits" };
+        _tray = new NotifyIcon { Icon = _portraitIcon, Visible = true, Text = "AgentCake: loading live limits" };
         _tray.MouseClick += (_, eventArgs) =>
         {
             if (eventArgs.Button == MouseButtons.Left) ShowDetails();
@@ -56,17 +58,31 @@ public sealed class TrayAppContext : ApplicationContext
         Interlocked.Exchange(ref _scanning, 0);
         _last = snapshot;
         var enabledUsage = GetEnabledLive(snapshot);
-        var next = _settings.ShowUsageBarsInTray && enabledUsage.Count > 0
-            ? IconRenderer.Render(enabledUsage)
-            : AgentCakeWindowIcon.Load();
-        var old = _icon;
-        _tray.Icon = next;
-        _icon = next;
-        old?.Dispose();
+        UpdateTrayIcon(enabledUsage);
         _tray.Text = enabledUsage.Count == 0
             ? "AgentCake: no live providers enabled"
             : Truncate(string.Join(" · ", enabledUsage.Select(usage => $"{usage.Service} {Display(usage)}")), 127);
         _details?.UpdateView(snapshot, _settings.Providers);
+    }
+
+    private void UpdateTrayIcon(IReadOnlyList<ServiceUsage> enabledUsage)
+    {
+        if (!_settings.ShowUsageBarsInTray || enabledUsage.Count == 0)
+        {
+            if (!ReferenceEquals(_tray.Icon, _portraitIcon)) _tray.Icon = _portraitIcon;
+            _barIconKey = null;
+            return;
+        }
+
+        string key = string.Join("|", enabledUsage.Select(usage => $"{usage.Service}:{usage.UsedPercent:0.##}"));
+        if (key == _barIconKey) return;
+
+        // NotifyIcon can still reference a native icon briefly after a swap, so retain
+        // generated bar icons until shutdown instead of disposing the previous one.
+        var bars = IconRenderer.Render(enabledUsage);
+        _barIcons.Add(bars);
+        _tray.Icon = bars;
+        _barIconKey = key;
     }
 
     private ContextMenuStrip BuildMenu()
@@ -182,7 +198,8 @@ public sealed class TrayAppContext : ApplicationContext
         {
             _timer.Dispose();
             _tray.Dispose();
-            _icon?.Dispose();
+            _portraitIcon.Dispose();
+            foreach (var icon in _barIcons) icon.Dispose();
             _marshal.Dispose();
         }
         base.Dispose(disposing);
