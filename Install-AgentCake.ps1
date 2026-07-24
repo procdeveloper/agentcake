@@ -21,7 +21,11 @@ $installedExe = Join-Path $installDir 'AgentCake.exe'
 $runKeyPath = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run'
 $runValueName = 'AgentCake'
 
-Get-Process -Name AgentCake -ErrorAction SilentlyContinue | Stop-Process -Force
+$runningAgentCake = Get-Process -Name AgentCake -ErrorAction SilentlyContinue
+if ($runningAgentCake) {
+    $runningAgentCake | Stop-Process -Force
+    $runningAgentCake | Wait-Process -ErrorAction SilentlyContinue
+}
 New-Item -ItemType Directory -Force -Path $installDir | Out-Null
 Copy-Item -Path (Join-Path $sourceDir '*') -Destination $installDir -Recurse -Force
 

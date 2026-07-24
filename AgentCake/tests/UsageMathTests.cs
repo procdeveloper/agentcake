@@ -12,6 +12,7 @@ public class UsageParserTests
         Assert.Equal(42, usage.UsedPercent);
         Assert.Equal(58, usage.RemainingPercent);
         Assert.NotNull(usage.ResetsAt);
+        Assert.Equal(TimeSpan.FromDays(7), usage.WeeklyWindow);
     }
 
     [Fact]
@@ -29,12 +30,15 @@ public class UsageParserTests
     public void Claude_Desktop_projects_the_next_reset_from_an_observed_weekly_reset()
     {
         const long resetSample = 1784833341006;
-        string json = $$"""{ "version": 2, "samples": [{ "t": {{resetSample - 300000}}, "u": { "sd": 94 } }, { "t": {{resetSample}}, "u": { "sd": 0 } }, { "t": {{resetSample + 300000}}, "u": { "sd": 15 } }] }""";
+        string json = $$"""{ "version": 2, "samples": [{ "t": {{resetSample - 300000}}, "u": { "fh": 94, "sd": 94 } }, { "t": {{resetSample}}, "u": { "fh": 0, "sd": 0 } }, { "t": {{resetSample + 300000}}, "u": { "fh": 33, "sd": 15 } }] }""";
 
         Assert.True(UsageParsers.TryParseClaudeDesktopWeekly(json, out var usage));
         Assert.Equal(15, usage.UsedPercent);
+        Assert.Equal(33, usage.FiveHourUsedPercent);
+        Assert.Equal(TimeSpan.FromDays(7), usage.WeeklyWindow);
         var observedReset = DateTimeOffset.FromUnixTimeMilliseconds(resetSample - 150000).LocalDateTime;
         observedReset = observedReset.AddSeconds(30).AddTicks(-(observedReset.AddSeconds(30).Ticks % TimeSpan.TicksPerMinute));
         Assert.Equal(observedReset.AddDays(7), usage.ResetsAt);
+        Assert.Equal(observedReset.AddHours(5), usage.FiveHourResetsAt);
     }
 }
