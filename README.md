@@ -2,7 +2,7 @@
   <img src="AgentCake/src/assets/agentcake-profile.png" width="180" alt="AgentCake's scheming agent mascot holding a birthday cake">
 </p>
 
-<h1 align="center">AgentCake</h1>
+<h1 align="center">Agent Cake's token buffet</h1>
 
 <p align="center">A Windows tray companion for real time AI Agent token usage monitoring</p>
 
@@ -10,27 +10,28 @@
 
 ## What it is
 
-AgentCake lives in the Windows notification area and shows the weekly usage you actually have left. It reads local, live account-limit data written by Codex and Claude Desktop; it does not estimate from token counts, scrape conversations, use an API key, or send your data anywhere.
+AgentCake lives in the Windows notification area and shows the usage you actually have left. It reads local account-limit data written by Codex and Claude Desktop; it does not scrape conversations, use an API key, or send your data anywhere.
 
-Click the tray portrait once to open Details. The Details view has an AgentCake portrait, service icons, current usage text, and compact pie charts. Click a service row to launch that agent.
+Click the tray portrait once to open Details. The Details view has an AgentCake portrait, service icons, current usage text, and compact usage charts. Click a service row to launch that agent.
 
 ## Done
 
-- Real Codex weekly-limit reading from `%USERPROFILE%\.codex\sessions`.
-- Real Claude Desktop weekly plan-usage reading from its local app data.
+- Real Codex weekly-limit reading from `%USERPROFILE%\.codex\sessions`, including its live reset window.
+- Real Claude Desktop seven-day and five-hour plan-usage reading from its local app data.
 - AgentCake portrait tray icon, with optional stacked usage bars.
 - Green, yellow, and pink/red thresholds at 65% and 80% used.
-- Details window beside the tray, with service icons, pie charts, refresh control, and a prominent mascot header.
+- Details window beside the tray, with centered service icons, a refresh control, and a prominent mascot header.
+- Usage charts with a weekly inner pie, Claude five-hour allowance rim, and blue weekly time-to-reset rim.
 - One-click launch for Codex and Claude Desktop.
 - Optional Claude Code row that opens Command Prompt and runs `claude`.
 - Provider visibility switches saved in `%APPDATA%\AgentCake\settings.json`.
 - Current-user **Run at login** option.
+- Self-contained Windows x64 release builder and one-click current-user installer.
 
 ## What's missing
 
 - Real usage readers for Claude Code, ChatGPT, Gemini, GitHub Copilot, Cursor, OpenRouter, and custom providers. Their switches are placeholders only; AgentCake will never invent a usage value.
-- A packaged installer and self-contained release build. Development currently runs from the built executable.
-- A reliable reset timestamp for Claude Desktop—the local history currently provides the weekly percentage, but not its reset time.
+- Direct access to Claude Desktop's server-provided reset timestamp. Its local history stores five-hour and seven-day samples but not reset times, so AgentCake derives the next Claude resets from observed reset transitions.
 
 ## Use it
 
@@ -58,8 +59,8 @@ Then run `release\install.bat`. It copies AgentCake into `%LOCALAPPDATA%\AgentCa
 
 ## Data sources
 
-- **Codex:** live `rate_limits` events in `%USERPROFILE%\.codex\sessions`.
-- **Claude Desktop:** `%LOCALAPPDATA%\Packages\Claude_pzs8sxrjxfjjc\LocalCache\Roaming\Claude\plan-usage-history.json`.
+- **Codex:** live `rate_limits` events in `%USERPROFILE%\.codex\sessions`, including `window_minutes` and reset timestamps.
+- **Claude Desktop:** `%LOCALAPPDATA%\Packages\Claude_pzs8sxrjxfjjc\LocalCache\Roaming\Claude\plan-usage-history.json`, which records five-hour (`fh`) and seven-day (`sd`) usage samples. Claude reset times are derived from the latest observed reset for each window.
 
 Open Claude Desktop while signed in at least once so it writes the plan-usage sample.
 

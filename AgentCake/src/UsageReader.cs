@@ -96,9 +96,10 @@ public static class UsageParsers
             }
             if (candidates.Count == 0) return false;
 
-            var weekly = candidates.OrderByDescending(candidate => candidate.Minutes).First().Window;
-            if (!TryNumber(weekly, "used_percent", out var used)) return false;
-            usage = new ServiceUsage("Codex", used, ReadReset(weekly), "Live Codex account limit");
+            var weekly = candidates.OrderByDescending(candidate => candidate.Minutes).First();
+            if (!TryNumber(weekly.Window, "used_percent", out var used)) return false;
+            TimeSpan? weeklyWindow = weekly.Minutes > 0 ? TimeSpan.FromMinutes(weekly.Minutes) : null;
+            usage = new ServiceUsage("Codex", used, ReadReset(weekly.Window), "Live Codex account limit", WeeklyWindow: weeklyWindow);
             return true;
         }
         catch { return false; }
@@ -113,7 +114,8 @@ public static class UsageParsers
             if (!doc.RootElement.TryGetProperty("samples", out var samples) || samples.ValueKind != JsonValueKind.Array)
                 return false;
 
-            var resetsAt = ReadClaudeDesktopWeeklyReset(samples);
+            var weeklyResetsAt = ReadClaudeDesktopReset(samples, "sd", TimeSpan.FromDays(7));
+            var fiveHourResetsAt = ReadClaudeDesktopReset(samples, "fh", TimeSpan.FromHours(5));
 
             for (var index = samples.GetArrayLength() - 1; index >= 0; index--)
             {
@@ -121,9 +123,15 @@ public static class UsageParsers
                 if (sample.TryGetProperty("u", out var usageValues) && usageValues.ValueKind == JsonValueKind.Object
                     && TryNumber(usageValues, "sd", out var used))
                 {
-                    usage = new ServiceUsage("Claude", used, resetsAt, resetsAt is null
+                    double? fiveHourUsed = TryNumber(usageValues, "fh", out var parsedFiveHourUsed)
+                        ? parsedFiveHourUsed
+                        : null;
+                    usage = new ServiceUsage("Claude", used, weeklyResetsAt, weeklyResetsAt is null
                         ? "Live Claude Desktop plan usage"
-                        : "Live Claude Desktop plan usage; next weekly reset is based on the last observed reset.");
+                        : "Live Claude Desktop plan usage; reset times are based on observed usage resets.",
+                        fiveHourUsed,
+                        fiveHourResetsAt,
+                        WeeklyWindow: TimeSpan.FromDays(7));
                     return true;
                 }
             }
@@ -132,7 +140,7 @@ public static class UsageParsers
         catch { return false; }
     }
 
-    private static DateTime? ReadClaudeDesktopWeeklyReset(JsonElement samples)
+    private static DateTime? ReadClaudeDesktopReset(JsonElement samples, string usageKey, TimeSpan window)
     {
         double? previousUsed = null;
         long? previousTimestamp = null;
@@ -141,12 +149,12 @@ public static class UsageParsers
         foreach (var sample in samples.EnumerateArray())
         {
             if (!sample.TryGetProperty("u", out var usageValues) || usageValues.ValueKind != JsonValueKind.Object
-                || !TryNumber(usageValues, "sd", out var used)
+                || !TryNumber(usageValues, usageKey, out var used)
                 || !TryNumber(sample, "t", out var timestamp))
                 continue;
 
-            // Claude Desktop stores sampled seven-day usage but no reset timestamp.
-            // A large drop to near-zero is a confirmed weekly reset in that history.
+            // Claude Desktop stores sampled usage but no reset timestamp. A large
+            // drop to near-zero marks the reset window for this specific allowance.
             if (previousUsed is { } previous && previous >= 50 && used <= 5 && used < previous)
             {
                 try
@@ -165,7 +173,7 @@ public static class UsageParsers
             previousTimestamp = (long)timestamp;
         }
 
-        return latestReset?.AddDays(7);
+        return latestReset?.Add(window);
     }
 
     private static DateTime RoundToNearestMinute(DateTime value)

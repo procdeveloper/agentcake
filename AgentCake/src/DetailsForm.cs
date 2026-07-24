@@ -9,6 +9,7 @@ public sealed class DetailsForm : Form
 {
     private readonly Label _codex = MakeLabel();
     private readonly Label _claude = MakeLabel();
+    private readonly Label _claudeFiveHour = MakeLabel();
     private readonly Label _footer = MakeLabel(dim: true);
     private readonly PictureBox _codexIcon = MakeServiceIcon(ServiceIcon.Codex);
     private readonly PictureBox _claudeIcon = MakeServiceIcon(ServiceIcon.Claude);
@@ -43,9 +44,9 @@ public sealed class DetailsForm : Form
         _subheading.Text = "Live weekly allowance monitor";
         _refreshButton.Click += (_, _) => refresh();
         WireLaunchAction(AgentLauncher.LaunchCodex, "Click to open Codex", _codexIcon, _codex, _codexChart);
-        WireLaunchAction(AgentLauncher.LaunchClaudeDesktop, "Click to open Claude Desktop", _claudeIcon, _claude, _claudeChart);
+        WireLaunchAction(AgentLauncher.LaunchClaudeDesktop, "Click to open Claude Desktop", _claudeIcon, _claude, _claudeFiveHour, _claudeChart);
         WireLaunchAction(AgentLauncher.LaunchClaudeCode, "Click to open Command Prompt and run Claude Code", _claudeCodeIcon, _claudeCode, _claudeCodeChart);
-        Controls.AddRange(new Control[] { _agentPortrait, _heading, _subheading, _codexIcon, _claudeIcon, _claudeCodeIcon, _codexChart, _claudeChart, _claudeCodeChart, _codex, _claude, _claudeCode, _footer, _refreshButton });
+        Controls.AddRange(new Control[] { _agentPortrait, _heading, _subheading, _codexIcon, _claudeIcon, _claudeCodeIcon, _codexChart, _claudeChart, _claudeCodeChart, _codex, _claude, _claudeFiveHour, _claudeCode, _footer, _refreshButton });
     }
 
     public void PositionNearTray()
@@ -112,11 +113,19 @@ public sealed class DetailsForm : Form
 
     public void UpdateView(UsageSnapshot snapshot, ProviderSettings providers)
     {
+        const int SourceGap = 8;
+        const int FooterGap = 24;
         int nextRowY = 94;
         nextRowY = SetServiceRow(providers.Codex, _codexIcon, _codexChart, _codex, snapshot.Codex, nextRowY);
-        nextRowY = SetServiceRow(providers.ClaudeDesktop, _claudeIcon, _claudeChart, _claude, snapshot.Claude, nextRowY);
+        if (providers.Codex && providers.ClaudeDesktop) nextRowY += SourceGap;
+        int claudeRowY = nextRowY;
+        bool hasClaudeFiveHour = providers.ClaudeDesktop && snapshot.Claude.FiveHourUsedPercent is not null;
+        nextRowY = SetServiceRow(providers.ClaudeDesktop, _claudeIcon, _claudeChart, _claude, snapshot.Claude, nextRowY, hasClaudeFiveHour);
+        SetClaudeFiveHourRow(providers.ClaudeDesktop, snapshot.Claude, claudeRowY);
         var claudeCode = ServiceUsage.Unavailable("Claude Code", "Launcher ready; live usage reader is not connected yet.");
+        if ((providers.Codex || providers.ClaudeDesktop) && providers.ClaudeCode) nextRowY += SourceGap;
         nextRowY = SetServiceRow(providers.ClaudeCode, _claudeCodeIcon, _claudeCodeChart, _claudeCode, claudeCode, nextRowY);
+        if (providers.Codex || providers.ClaudeDesktop || providers.ClaudeCode) nextRowY += FooterGap;
         int placeholders = CountEnabledPlaceholders(providers);
         _footer.Text = placeholders == 0
             ? $"Updated {snapshot.GeneratedAt:HH:mm:ss}"
@@ -130,7 +139,8 @@ public sealed class DetailsForm : Form
     {
         if (usage.RemainingPercent is not { } remaining) return $"{usage.Service}: unavailable\n{usage.Detail}";
         string reset = usage.ResetsAt is { } at ? $" · resets {at:ddd HH:mm}" : "";
-        return $"{usage.Service}: {remaining}% remaining\n{usage.UsedPercent:0.#}% used{reset}";
+        string windowLabel = usage.FiveHourUsedPercent is null ? "" : "7d: ";
+        return $"{usage.Service}: {remaining}% remaining\n{windowLabel}{usage.UsedPercent:0.#}% used{reset}";
     }
 
     private static Label MakeLabel(bool dim = false) => new()
@@ -176,19 +186,34 @@ public sealed class DetailsForm : Form
         old?.Dispose();
     }
 
-    private static int SetServiceRow(bool visible, PictureBox icon, PictureBox chart, Label text, ServiceUsage usage, int y)
+    private static int SetServiceRow(bool visible, PictureBox icon, PictureBox chart, Label text, ServiceUsage usage, int y, bool hasExtraLine = false)
     {
         icon.Visible = visible;
         chart.Visible = visible;
         text.Visible = visible;
         if (!visible) return y;
 
-        icon.SetBounds(16, y + 3, 40, 40);
-        chart.SetBounds(334, y + 3, 40, 40);
+        int blockHeight = hasExtraLine ? 76 : 54;
+        icon.SetBounds(16, y + (blockHeight - 40) / 2, 40, 40);
+        chart.SetBounds(328, y + (blockHeight - 52) / 2, 52, 52);
         text.SetBounds(66, y, 260, 54);
         text.Text = Format(usage);
         SetChart(chart, usage);
-        return y + 60;
+        return y + blockHeight + 6;
+    }
+
+    private void SetClaudeFiveHourRow(bool visible, ServiceUsage usage, int sourceTop)
+    {
+        if (!visible || usage.FiveHourUsedPercent is not { } fiveHourUsed)
+        {
+            _claudeFiveHour.Visible = false;
+            return;
+        }
+
+        string reset = usage.FiveHourResetsAt is { } at ? $" - resets {at:HH:mm}" : "";
+        _claudeFiveHour.Text = $"5h: {fiveHourUsed:0.#}% used{reset}";
+        _claudeFiveHour.SetBounds(66, sourceTop + 52, 260, 22);
+        _claudeFiveHour.Visible = true;
     }
 
     private static int CountEnabledPlaceholders(ProviderSettings providers) => new[]
@@ -219,33 +244,75 @@ internal static class UsagePieRenderer
     private static readonly Color Normal = Color.FromArgb(65, 150, 100);
     private static readonly Color Warning = Color.FromArgb(241, 205, 76);
     private static readonly Color Critical = Color.FromArgb(244, 161, 174);
+    private static readonly Color TimeLeft = Color.FromArgb(91, 169, 255);
+    private static readonly Color TimeLeftTrack = Color.FromArgb(43, 73, 108);
 
     public static Bitmap Render(ServiceUsage usage)
     {
-        var bitmap = new Bitmap(40, 40);
+        const int canvasSize = 52;
+        var bitmap = new Bitmap(canvasSize, canvasSize);
         using var graphics = Graphics.FromImage(bitmap);
         graphics.SmoothingMode = SmoothingMode.AntiAlias;
         graphics.Clear(Color.Transparent);
-        var circle = new Rectangle(2, 2, 36, 36);
+        // The 36px weekly pie retains its original size inside a larger canvas
+        // that leaves room for its allowance and time-to-reset rims.
+        var circle = new Rectangle(8, 8, 36, 36);
+
+        if (usage.FiveHourUsedPercent is { } fiveHourUsed)
+        {
+            var rim = new Rectangle(5, 5, 42, 42);
+            using var rimTrack = new Pen(Track, 4.5f);
+            graphics.DrawEllipse(rimTrack, rim);
+            if (fiveHourUsed > 0)
+            {
+                float sweep = (float)Math.Min(Math.Clamp(fiveHourUsed, 0d, 100d) * 3.6d, 359.9d);
+                using var rimFill = new Pen(UsageColor(fiveHourUsed), 4.5f) { StartCap = LineCap.Flat, EndCap = LineCap.Flat };
+                graphics.DrawArc(rimFill, rim, -90, sweep);
+            }
+        }
+
+        int? weeklyTimeLeft = WeeklyTimeLeftPercent(usage);
+        if (weeklyTimeLeft is { } timeLeft)
+        {
+            var timeRim = new Rectangle(1, 1, 50, 50);
+            using var timeTrack = new Pen(TimeLeftTrack, 2f);
+            graphics.DrawEllipse(timeTrack, timeRim);
+            if (timeLeft > 0)
+            {
+                float sweep = (float)Math.Min(timeLeft * 3.6d, 359.9d);
+                using var timeFill = new Pen(TimeLeft, 2f) { StartCap = LineCap.Flat, EndCap = LineCap.Flat };
+                // The free end retreats counterclockwise as time remaining declines.
+                graphics.DrawArc(timeFill, timeRim, -90, sweep);
+            }
+        }
 
         using (var track = new SolidBrush(Track)) graphics.FillEllipse(track, circle);
         if (usage.UsedPercent is { } used)
         {
             float sweep = (float)(Math.Clamp(used, 0d, 100d) * 3.6d);
-            using var fill = new SolidBrush(used >= 80 ? Critical : used >= 65 ? Warning : Normal);
+            using var fill = new SolidBrush(UsageColor(used));
             graphics.FillPie(fill, circle, -90, sweep);
         }
 
         string label = usage.RemainingPercent is { } remaining ? remaining.ToString() : "--";
-        using var font = new Font("Segoe UI", 9f, FontStyle.Bold, GraphicsUnit.Pixel);
-        var size = graphics.MeasureString(label, font);
+        using var font = new Font("Segoe UI", 18f, FontStyle.Bold, GraphicsUnit.Pixel);
+        var labelSize = graphics.MeasureString(label, font);
         using var shadow = new SolidBrush(Color.FromArgb(150, Color.Black));
         using var text = new SolidBrush(Color.White);
-        float x = (40 - size.Width) / 2f;
-        float y = (40 - size.Height) / 2f - 1f;
+        float x = (canvasSize - labelSize.Width) / 2f;
+        float y = (canvasSize - labelSize.Height) / 2f - 1f;
         graphics.DrawString(label, font, shadow, x + 1, y + 1);
         graphics.DrawString(label, font, text, x, y);
         return bitmap;
+    }
+
+    private static Color UsageColor(double used) => used >= 80 ? Critical : used >= 65 ? Warning : Normal;
+
+    private static int? WeeklyTimeLeftPercent(ServiceUsage usage)
+    {
+        if (usage.ResetsAt is not { } resetsAt || usage.WeeklyWindow is not { } weeklyWindow) return null;
+        double percent = (resetsAt - DateTime.Now).TotalMinutes / weeklyWindow.TotalMinutes * 100d;
+        return (int)Math.Round(Math.Clamp(percent, 0d, 100d));
     }
 }
 
