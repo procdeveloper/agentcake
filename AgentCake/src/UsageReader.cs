@@ -113,19 +113,65 @@ public static class UsageParsers
             if (!doc.RootElement.TryGetProperty("samples", out var samples) || samples.ValueKind != JsonValueKind.Array)
                 return false;
 
+            var resetsAt = ReadClaudeDesktopWeeklyReset(samples);
+
             for (var index = samples.GetArrayLength() - 1; index >= 0; index--)
             {
                 var sample = samples[index];
                 if (sample.TryGetProperty("u", out var usageValues) && usageValues.ValueKind == JsonValueKind.Object
                     && TryNumber(usageValues, "sd", out var used))
                 {
-                    usage = new ServiceUsage("Claude", used, null, "Live Claude Desktop plan usage");
+                    usage = new ServiceUsage("Claude", used, resetsAt, resetsAt is null
+                        ? "Live Claude Desktop plan usage"
+                        : "Live Claude Desktop plan usage; next weekly reset is based on the last observed reset.");
                     return true;
                 }
             }
             return false;
         }
         catch { return false; }
+    }
+
+    private static DateTime? ReadClaudeDesktopWeeklyReset(JsonElement samples)
+    {
+        double? previousUsed = null;
+        long? previousTimestamp = null;
+        DateTime? latestReset = null;
+
+        foreach (var sample in samples.EnumerateArray())
+        {
+            if (!sample.TryGetProperty("u", out var usageValues) || usageValues.ValueKind != JsonValueKind.Object
+                || !TryNumber(usageValues, "sd", out var used)
+                || !TryNumber(sample, "t", out var timestamp))
+                continue;
+
+            // Claude Desktop stores sampled seven-day usage but no reset timestamp.
+            // A large drop to near-zero is a confirmed weekly reset in that history.
+            if (previousUsed is { } previous && previous >= 50 && used <= 5 && used < previous)
+            {
+                try
+                {
+                    // The reset happened between two five-minute history samples. The
+                    // midpoint avoids presenting the polling offset as the reset time.
+                    long resetTimestamp = previousTimestamp is { } previousTime
+                        ? previousTime + ((long)timestamp - previousTime) / 2
+                        : (long)timestamp;
+                    latestReset = RoundToNearestMinute(DateTimeOffset.FromUnixTimeMilliseconds(resetTimestamp).LocalDateTime);
+                }
+                catch { }
+            }
+
+            previousUsed = used;
+            previousTimestamp = (long)timestamp;
+        }
+
+        return latestReset?.AddDays(7);
+    }
+
+    private static DateTime RoundToNearestMinute(DateTime value)
+    {
+        value = value.AddSeconds(30);
+        return value.AddTicks(-(value.Ticks % TimeSpan.TicksPerMinute));
     }
 
     private static JsonElement? FindNamedObject(JsonElement element, string name)
