@@ -25,7 +25,7 @@ public sealed class DetailsForm : Form
 
     public DetailsForm(Action refresh)
     {
-        Text = "AgentCake usage monitor";
+        Text = "Agent Cake's token buffet";
         Icon = AgentCakeWindowIcon.Load();
         BackColor = Color.FromArgb(28, 30, 33);
         ForeColor = Color.White;
@@ -164,8 +164,8 @@ public sealed class DetailsForm : Form
     {
         AutoSize = false,
         ForeColor = Color.White,
-        Font = new Font("Segoe UI", 12f, FontStyle.Bold),
-        Text = "AgentCake usage monitor",
+        Font = new Font("Segoe UI", 10.5f, FontStyle.Bold),
+        Text = "Agent Cake's token buffet",
         TextAlign = ContentAlignment.MiddleLeft
     };
 
@@ -296,7 +296,7 @@ internal static class ServiceIconRenderer
         {
             using var background = new SolidBrush(Color.FromArgb(52, 55, 61));
             using var text = new SolidBrush(Color.FromArgb(224, 228, 232));
-            using var font = new Font("Cascadia Mono", 15f, FontStyle.Bold, GraphicsUnit.Pixel);
+            using var font = new Font("Segoe UI", 13f, FontStyle.Bold, GraphicsUnit.Pixel);
             graphics.FillEllipse(background, 1, 1, 38, 38);
             graphics.DrawString(">_", font, text, 7, 11);
         }

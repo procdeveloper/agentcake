@@ -24,4 +24,17 @@ public class UsageParserTests
         Assert.Equal(16, usage.RemainingPercent);
         Assert.Null(usage.ResetsAt);
     }
+
+    [Fact]
+    public void Claude_Desktop_projects_the_next_reset_from_an_observed_weekly_reset()
+    {
+        const long resetSample = 1784833341006;
+        string json = $$"""{ "version": 2, "samples": [{ "t": {{resetSample - 300000}}, "u": { "sd": 94 } }, { "t": {{resetSample}}, "u": { "sd": 0 } }, { "t": {{resetSample + 300000}}, "u": { "sd": 15 } }] }""";
+
+        Assert.True(UsageParsers.TryParseClaudeDesktopWeekly(json, out var usage));
+        Assert.Equal(15, usage.UsedPercent);
+        var observedReset = DateTimeOffset.FromUnixTimeMilliseconds(resetSample - 150000).LocalDateTime;
+        observedReset = observedReset.AddSeconds(30).AddTicks(-(observedReset.AddSeconds(30).Ticks % TimeSpan.TicksPerMinute));
+        Assert.Equal(observedReset.AddDays(7), usage.ResetsAt);
+    }
 }
