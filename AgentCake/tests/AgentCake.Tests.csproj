@@ -14,5 +14,6 @@
     <Compile Include="..\src\UsageModels.cs" Link="UsageModels.cs" />
     <Compile Include="..\src\UsageReader.cs" Link="UsageReader.cs" />
     <Compile Include="..\src\AppSettings.cs" Link="AppSettings.cs" />
+    <Compile Include="..\src\CrashLog.cs" Link="CrashLog.cs" />
   </ItemGroup>
 </Project>

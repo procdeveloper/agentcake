@@ -6,7 +6,7 @@ public class UsageParserTests
     [Fact]
     public void Codex_uses_the_longest_live_limit_window()
     {
-        const string json = """{ "payload": { "rate_limits": { "primary": { "used_percent": 42, "window_minutes": 10080, "resets_at": 1784991002 }, "secondary": { "used_percent": 5, "window_minutes": 300 } } } }""";
+        const string json = """{ "payload": { "rate_limits": { "limit_id": "codex", "primary": { "used_percent": 42, "window_minutes": 10080, "resets_at": 1784991002 }, "secondary": { "used_percent": 5, "window_minutes": 300 } } } }""";
         Assert.True(UsageParsers.TryParseCodexWeekly(json, out var usage));
         Assert.Equal("Codex", usage.Service);
         Assert.Equal(42, usage.UsedPercent);
@@ -18,7 +18,7 @@ public class UsageParserTests
     [Fact]
     public void Codex_accepts_camel_case_remaining_percent_and_second_windows()
     {
-        const string json = """{ "event": { "rateLimits": { "short": { "usagePercent": 81, "windowSeconds": 18000 }, "weeklyAllowance": { "remainingPercent": 91, "windowSeconds": 604800, "nextResetAt": "1785564999" } } } }""";
+        const string json = """{ "event": { "rateLimits": { "limitId": "codex", "short": { "usagePercent": 81, "windowSeconds": 18000 }, "weeklyAllowance": { "remainingPercent": 91, "windowSeconds": 604800, "nextResetAt": "1785564999" } } } }""";
         Assert.True(UsageParsers.TryParseCodexWeekly(json, out var usage));
         Assert.Equal(9, usage.UsedPercent);
         Assert.Equal(91, usage.RemainingPercent);
@@ -34,7 +34,7 @@ public class UsageParserTests
         try
         {
             string padding = new('x', 300_000);
-            string json = $$"""{ "payload": { "info": { "rate_limits": { "primary": { "used_percent": 12, "window_minutes": 10080, "resets_at": 1785564999 } }, "padding": "{{padding}}" } } }""";
+            string json = $$"""{ "timestamp": "2026-07-25T16:33:06Z", "payload": { "info": { "rate_limits": { "limit_id": "codex", "primary": { "used_percent": 12, "window_minutes": 10080, "resets_at": 1785564999 } }, "padding": "{{padding}}" } } }""";
             File.WriteAllText(Path.Combine(sessionsDir, "large-session.jsonl"), json);
 
             var reader = new UsageReader(() => new AppSettings { CodexSessionsDir = sessionsDir });
@@ -43,6 +43,40 @@ public class UsageParserTests
             Assert.Equal(12, usage.UsedPercent);
             Assert.Equal(88, usage.RemainingPercent);
             Assert.Equal(TimeSpan.FromDays(7), usage.WeeklyWindow);
+        }
+        finally
+        {
+            Directory.Delete(sessionsDir, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void Codex_ignores_model_specific_allowances()
+    {
+        const string json = """{ "timestamp": "2026-07-25T16:35:06Z", "payload": { "rate_limits": { "limit_id": "codex_bengalfox", "limit_name": "GPT-5.3-Codex-Spark", "primary": { "used_percent": 0, "window_minutes": 10080 } } } }""";
+        Assert.False(UsageParsers.TryParseCodexWeekly(json, out _));
+    }
+
+    [Fact]
+    public void Codex_reader_uses_event_time_not_file_write_time()
+    {
+        string sessionsDir = Path.Combine(Path.GetTempPath(), "AgentCake.Tests", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(sessionsDir);
+        try
+        {
+            string olderEvent = """{ "timestamp": "2026-07-25T16:31:00Z", "payload": { "rate_limits": { "limit_id": "codex", "primary": { "used_percent": 0, "window_minutes": 10080 } } } }""";
+            string newerEvent = """{ "timestamp": "2026-07-25T16:33:00Z", "payload": { "rate_limits": { "limit_id": "codex", "primary": { "used_percent": 15, "window_minutes": 10080 } } } }""";
+            string newerFileTimestamp = Path.Combine(sessionsDir, "newer-file.jsonl");
+            string olderFileTimestamp = Path.Combine(sessionsDir, "older-file.jsonl");
+            File.WriteAllText(newerFileTimestamp, olderEvent);
+            File.WriteAllText(olderFileTimestamp, newerEvent);
+            File.SetLastWriteTimeUtc(newerFileTimestamp, DateTime.UtcNow);
+            File.SetLastWriteTimeUtc(olderFileTimestamp, DateTime.UtcNow.AddHours(-1));
+
+            var usage = new UsageReader(() => new AppSettings { CodexSessionsDir = sessionsDir }).Scan().Codex;
+
+            Assert.Equal(15, usage.UsedPercent);
+            Assert.Equal(85, usage.RemainingPercent);
         }
         finally
         {

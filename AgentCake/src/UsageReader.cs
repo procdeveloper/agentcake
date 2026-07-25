@@ -6,6 +6,7 @@ namespace AgentCake;
 public sealed class UsageReader
 {
     private readonly Func<AppSettings> _settings;
+    private ServiceUsage? _lastCodexUsage;
 
     public UsageReader(Func<AppSettings> settings) => _settings = settings;
 
@@ -15,10 +16,10 @@ public sealed class UsageReader
         return new UsageSnapshot(ReadCodex(cfg.ResolveCodexSessionsDir()), ReadClaudeDesktop(cfg.ResolveClaudeDesktopUsagePath()), DateTime.Now);
     }
 
-    private static ServiceUsage ReadCodex(string sessionsDir)
+    private ServiceUsage ReadCodex(string sessionsDir)
     {
         if (!Directory.Exists(sessionsDir))
-            return ServiceUsage.Unavailable("Codex", "Codex session folder was not found.");
+            return _lastCodexUsage ?? ServiceUsage.Unavailable("Codex", "Codex session folder was not found.");
 
         try
         {
@@ -30,25 +31,32 @@ public sealed class UsageReader
                 // newest dozen session files as the complete account history.
                 .Take(80);
 
+            CodexUsageRecord? newest = null;
             foreach (var file in files)
             {
-                ServiceUsage? latest = null;
-                foreach (var line in TailLines(file.FullName))
-                    if (UsageParsers.TryParseCodexWeekly(line, out var usage)) latest = usage;
-                if (latest is not null) return latest;
+                var latestInFile = FindNewestCodexRecord(TailLines(file.FullName));
 
                 // Session JSONL records can contain a very large prompt or tool
                 // result. If the rate-limit record lives near the start of one of
                 // those lines, a byte-tail begins mid-JSON and cannot parse it.
                 // Only then fall back to a complete, shared-read scan of this file.
-                foreach (var line in AllLines(file.FullName))
-                    if (line.Contains("\"rate_limits\"", StringComparison.Ordinal) && UsageParsers.TryParseCodexWeekly(line, out var fullUsage)) latest = fullUsage;
-                if (latest is not null) return latest;
+                if (latestInFile is null) latestInFile = FindNewestCodexRecord(AllLines(file.FullName));
+
+                // Files can be touched out of chronological order. The event time,
+                // not the filesystem write time, is the authority for live usage.
+                if (latestInFile is not null && (newest is null || latestInFile.RecordedAt > newest.RecordedAt))
+                    newest = latestInFile;
+            }
+
+            if (newest is not null)
+            {
+                _lastCodexUsage = newest.Usage;
+                return newest.Usage;
             }
         }
-        catch { }
+        catch (Exception exception) { CrashLog.Write("Codex usage scan failed", exception); }
 
-        return ServiceUsage.Unavailable("Codex", "No live weekly rate-limit record has been written yet.");
+        return _lastCodexUsage ?? ServiceUsage.Unavailable("Codex", "No live weekly account-limit record has been written yet.");
     }
 
     private static ServiceUsage ReadClaudeDesktop(string historyPath)
@@ -93,13 +101,33 @@ public sealed class UsageReader
             if (!string.IsNullOrWhiteSpace(line)) yield return line;
         }
     }
+
+    private static CodexUsageRecord? FindNewestCodexRecord(IEnumerable<string> lines)
+    {
+        CodexUsageRecord? newest = null;
+        foreach (var line in lines)
+        {
+            if (!line.Contains("\"rate_limits\"", StringComparison.OrdinalIgnoreCase)
+                && !line.Contains("\"rateLimits\"", StringComparison.OrdinalIgnoreCase)) continue;
+            if (!UsageParsers.TryParseCodexWeekly(line, out var usage, out var recordedAt)) continue;
+            var candidate = new CodexUsageRecord(usage, recordedAt);
+            if (newest is null || candidate.RecordedAt >= newest.RecordedAt) newest = candidate;
+        }
+        return newest;
+    }
 }
+
+internal sealed record CodexUsageRecord(ServiceUsage Usage, DateTimeOffset RecordedAt);
 
 public static class UsageParsers
 {
     public static bool TryParseCodexWeekly(string json, out ServiceUsage usage)
+        => TryParseCodexWeekly(json, out usage, out _);
+
+    internal static bool TryParseCodexWeekly(string json, out ServiceUsage usage, out DateTimeOffset recordedAt)
     {
         usage = ServiceUsage.Unavailable("Codex", "No live weekly limit.");
+        recordedAt = DateTimeOffset.MinValue;
         try
         {
             using var doc = JsonDocument.Parse(json);
@@ -109,6 +137,10 @@ public static class UsageParsers
             var candidates = new List<(JsonElement Window, double Minutes, int NameScore)>();
             foreach (var limits in limitSets)
             {
+                // Codex can emit per-model allowances alongside the account-wide
+                // one. The tray's Codex row must never substitute a model quota.
+                if ((!TryString(limits, "limit_id", out var limitId) && !TryString(limits, "limitId", out limitId))
+                    || !string.Equals(limitId, "codex", StringComparison.OrdinalIgnoreCase)) continue;
                 foreach (var property in limits.EnumerateObject())
                 {
                     var window = property.Value;
@@ -128,6 +160,7 @@ public static class UsageParsers
             if (!TryReadUsedPercent(weekly.Window, out var used)) return false;
             TimeSpan? weeklyWindow = weekly.Minutes > 0 ? TimeSpan.FromMinutes(weekly.Minutes) : null;
             usage = new ServiceUsage("Codex", used, ReadReset(weekly.Window), "Live Codex account limit", WeeklyWindow: weeklyWindow);
+            recordedAt = ReadEventTimestamp(doc.RootElement);
             return true;
         }
         catch { return false; }
@@ -240,6 +273,12 @@ public static class UsageParsers
         return property.ValueKind == JsonValueKind.String && double.TryParse(property.GetString(), System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out value);
     }
 
+    private static bool TryString(JsonElement element, string name, out string? value)
+    {
+        value = null;
+        return TryGetProperty(element, name, out var property) && property.ValueKind == JsonValueKind.String && (value = property.GetString()) is not null;
+    }
+
     private static bool TryGetProperty(JsonElement element, string name, out JsonElement value)
     {
         if (element.TryGetProperty(name, out value)) return true;
@@ -289,6 +328,13 @@ public static class UsageParsers
         : name.Contains("primary", StringComparison.OrdinalIgnoreCase)
             ? 1
             : 0;
+
+    private static DateTimeOffset ReadEventTimestamp(JsonElement root)
+    {
+        if (TryGetProperty(root, "timestamp", out var timestamp) && timestamp.ValueKind == JsonValueKind.String
+            && DateTimeOffset.TryParse(timestamp.GetString(), out var parsed)) return parsed;
+        return DateTimeOffset.MinValue;
+    }
 
     private static DateTime? ReadReset(JsonElement element)
     {
