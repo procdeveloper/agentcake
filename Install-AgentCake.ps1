@@ -21,19 +21,51 @@ $installedExe = Join-Path $installDir 'AgentCake.exe'
 $runKeyPath = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run'
 $runValueName = 'AgentCake'
 
-$runningAgentCake = Get-Process -Name AgentCake -ErrorAction SilentlyContinue
-if ($runningAgentCake) {
-    $runningAgentCake | Stop-Process -Force
-    $runningAgentCake | Wait-Process -ErrorAction SilentlyContinue
+function Stop-RunningAgentCake {
+    $deadline = (Get-Date).AddSeconds(10)
+    do {
+        $runningAgentCake = Get-Process -Name AgentCake -ErrorAction SilentlyContinue
+        if (-not $runningAgentCake) { return }
+        $runningAgentCake | Stop-Process -Force -ErrorAction SilentlyContinue
+        Start-Sleep -Milliseconds 250
+    } while ((Get-Date) -lt $deadline)
+
+    throw 'AgentCake did not exit within 10 seconds. Close it from the notification area and rerun the installer.'
 }
+
+Stop-RunningAgentCake
 New-Item -ItemType Directory -Force -Path $installDir | Out-Null
-Copy-Item -Path (Join-Path $sourceDir '*') -Destination $installDir -Recurse -Force
+
+# Windows can retain a just-closed executable handle briefly. Retry the copy so
+# a normal update never leaves the existing tray app half-installed.
+$copied = $false
+for ($attempt = 1; $attempt -le 10; $attempt++) {
+    try {
+        Copy-Item -Path (Join-Path $sourceDir '*') -Destination $installDir -Recurse -Force
+        $copied = $true
+        break
+    }
+    catch [System.IO.IOException] {
+        if ($attempt -eq 10) { throw }
+        Start-Sleep -Milliseconds 500
+    }
+}
+if (-not $copied) { throw 'AgentCake files could not be updated.' }
 
 New-Item -Path $runKeyPath -Force | Out-Null
 Set-ItemProperty -Path $runKeyPath -Name $runValueName -Value ('"{0}"' -f $installedExe)
 
 if (-not $NoStart) {
     Start-Process -FilePath $installedExe -WorkingDirectory $installDir -WindowStyle Hidden
+
+    $deadline = (Get-Date).AddSeconds(10)
+    do {
+        Start-Sleep -Milliseconds 250
+        $started = Get-Process -Name AgentCake -ErrorAction SilentlyContinue
+        if ($started) { break }
+    } while ((Get-Date) -lt $deadline)
+
+    if (-not $started) { throw 'AgentCake was installed but did not start. Run the installed AgentCake.exe once to see the Windows error.' }
 }
 
 Write-Host "Installed AgentCake: $installedExe"
