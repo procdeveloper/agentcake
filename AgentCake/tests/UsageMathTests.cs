@@ -27,6 +27,30 @@ public class UsageParserTests
     }
 
     [Fact]
+    public void Codex_reader_falls_back_when_a_large_jsonl_line_exceeds_the_tail()
+    {
+        string sessionsDir = Path.Combine(Path.GetTempPath(), "AgentCake.Tests", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(sessionsDir);
+        try
+        {
+            string padding = new('x', 300_000);
+            string json = $$"""{ "payload": { "info": { "rate_limits": { "primary": { "used_percent": 12, "window_minutes": 10080, "resets_at": 1785564999 } }, "padding": "{{padding}}" } } }""";
+            File.WriteAllText(Path.Combine(sessionsDir, "large-session.jsonl"), json);
+
+            var reader = new UsageReader(() => new AppSettings { CodexSessionsDir = sessionsDir });
+            var usage = reader.Scan().Codex;
+
+            Assert.Equal(12, usage.UsedPercent);
+            Assert.Equal(88, usage.RemainingPercent);
+            Assert.Equal(TimeSpan.FromDays(7), usage.WeeklyWindow);
+        }
+        finally
+        {
+            Directory.Delete(sessionsDir, recursive: true);
+        }
+    }
+
+    [Fact]
     public void Claude_Desktop_uses_the_latest_seven_day_sample()
     {
         const string json = """{ "version": 2, "samples": [{ "t": 1784447000000, "u": { "fh": 11, "sd": 83 } }, { "t": 1784447300000, "u": { "fh": 15, "sd": 84 } }] }""";

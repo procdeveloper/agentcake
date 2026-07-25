@@ -36,6 +36,14 @@ public sealed class UsageReader
                 foreach (var line in TailLines(file.FullName))
                     if (UsageParsers.TryParseCodexWeekly(line, out var usage)) latest = usage;
                 if (latest is not null) return latest;
+
+                // Session JSONL records can contain a very large prompt or tool
+                // result. If the rate-limit record lives near the start of one of
+                // those lines, a byte-tail begins mid-JSON and cannot parse it.
+                // Only then fall back to a complete, shared-read scan of this file.
+                foreach (var line in AllLines(file.FullName))
+                    if (line.Contains("\"rate_limits\"", StringComparison.Ordinal) && UsageParsers.TryParseCodexWeekly(line, out var fullUsage)) latest = fullUsage;
+                if (latest is not null) return latest;
             }
         }
         catch { }
@@ -74,6 +82,16 @@ public sealed class UsageReader
             text = firstNewline >= 0 ? text[(firstNewline + 1)..] : "";
         }
         return text.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+    }
+
+    private static IEnumerable<string> AllLines(string path)
+    {
+        using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+        using var reader = new StreamReader(stream, Encoding.UTF8, detectEncodingFromByteOrderMarks: true);
+        while (reader.ReadLine() is { } line)
+        {
+            if (!string.IsNullOrWhiteSpace(line)) yield return line;
+        }
     }
 }
 
