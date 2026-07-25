@@ -31,27 +31,32 @@ public sealed class UsageReader
                 // newest dozen session files as the complete account history.
                 .Take(80);
 
-            CodexUsageRecord? newest = null;
+            var records = new List<CodexUsageRecord>();
             foreach (var file in files)
             {
-                var latestInFile = FindNewestCodexRecord(TailLines(file.FullName));
+                var fileRecords = FindCodexRecords(TailLines(file.FullName)).ToList();
 
                 // Session JSONL records can contain a very large prompt or tool
                 // result. If the rate-limit record lives near the start of one of
                 // those lines, a byte-tail begins mid-JSON and cannot parse it.
                 // Only then fall back to a complete, shared-read scan of this file.
-                if (latestInFile is null) latestInFile = FindNewestCodexRecord(AllLines(file.FullName));
+                if (fileRecords.Count == 0) fileRecords = FindCodexRecords(AllLines(file.FullName)).ToList();
 
                 // Files can be touched out of chronological order. The event time,
                 // not the filesystem write time, is the authority for live usage.
-                if (latestInFile is not null && (newest is null || latestInFile.RecordedAt > newest.RecordedAt))
-                    newest = latestInFile;
+                records.AddRange(fileRecords);
             }
 
+            var newest = records.OrderByDescending(record => record.RecordedAt).FirstOrDefault();
             if (newest is not null)
             {
-                _lastCodexUsage = newest.Usage;
-                return newest.Usage;
+                var pace = UsagePace.Estimate(records.Select(record => new UsageSample(record.RecordedAt, record.Usage.UsedPercent ?? 0, record.Usage.ResetsAt)), newest.Usage);
+                _lastCodexUsage = newest.Usage with
+                {
+                    BurnRatePercentPerHour = pace?.BurnRatePercentPerHour,
+                    BurnPaceRatio = pace?.BurnPaceRatio
+                };
+                return _lastCodexUsage;
             }
         }
         catch (Exception exception) { CrashLog.Write("Codex usage scan failed", exception); }
@@ -102,18 +107,15 @@ public sealed class UsageReader
         }
     }
 
-    private static CodexUsageRecord? FindNewestCodexRecord(IEnumerable<string> lines)
+    private static IEnumerable<CodexUsageRecord> FindCodexRecords(IEnumerable<string> lines)
     {
-        CodexUsageRecord? newest = null;
         foreach (var line in lines)
         {
             if (!line.Contains("\"rate_limits\"", StringComparison.OrdinalIgnoreCase)
                 && !line.Contains("\"rateLimits\"", StringComparison.OrdinalIgnoreCase)) continue;
             if (!UsageParsers.TryParseCodexWeekly(line, out var usage, out var recordedAt)) continue;
-            var candidate = new CodexUsageRecord(usage, recordedAt);
-            if (newest is null || candidate.RecordedAt >= newest.RecordedAt) newest = candidate;
+            yield return new CodexUsageRecord(usage, recordedAt);
         }
-        return newest;
     }
 }
 
@@ -177,6 +179,17 @@ public static class UsageParsers
 
             var weeklyResetsAt = ReadClaudeDesktopReset(samples, "sd", TimeSpan.FromDays(7));
             var fiveHourResetsAt = ReadClaudeDesktopReset(samples, "fh", TimeSpan.FromHours(5));
+            var weeklySamples = new List<UsageSample>();
+            foreach (var sample in samples.EnumerateArray())
+            {
+                if (sample.TryGetProperty("u", out var usageValues) && usageValues.ValueKind == JsonValueKind.Object
+                    && TryNumber(usageValues, "sd", out var sampleUsed)
+                    && TryNumber(sample, "t", out var sampleTimestamp))
+                {
+                    try { weeklySamples.Add(new UsageSample(DateTimeOffset.FromUnixTimeMilliseconds((long)sampleTimestamp), sampleUsed, weeklyResetsAt)); }
+                    catch { }
+                }
+            }
 
             for (var index = samples.GetArrayLength() - 1; index >= 0; index--)
             {
@@ -187,12 +200,18 @@ public static class UsageParsers
                     double? fiveHourUsed = TryNumber(usageValues, "fh", out var parsedFiveHourUsed)
                         ? parsedFiveHourUsed
                         : null;
-                    usage = new ServiceUsage("Claude", used, weeklyResetsAt, weeklyResetsAt is null
+                    var liveUsage = new ServiceUsage("Claude", used, weeklyResetsAt, weeklyResetsAt is null
                         ? "Live Claude Desktop plan usage"
                         : "Live Claude Desktop plan usage; reset times are based on observed usage resets.",
                         fiveHourUsed,
                         fiveHourResetsAt,
                         WeeklyWindow: TimeSpan.FromDays(7));
+                    var pace = UsagePace.Estimate(weeklySamples, liveUsage);
+                    usage = liveUsage with
+                    {
+                        BurnRatePercentPerHour = pace?.BurnRatePercentPerHour,
+                        BurnPaceRatio = pace?.BurnPaceRatio
+                    };
                     return true;
                 }
             }

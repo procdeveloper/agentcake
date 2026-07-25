@@ -7,6 +7,8 @@ namespace AgentCake;
 
 public sealed class DetailsForm : Form
 {
+    private const int ContentMargin = 24;
+    private const int ContentRight = 472;
     private readonly Label _codex = MakeLabel();
     private readonly Label _claude = MakeLabel();
     private readonly Label _claudeFiveHour = MakeLabel();
@@ -17,10 +19,17 @@ public sealed class DetailsForm : Form
     private readonly PictureBox _codexChart = MakeUsageChart();
     private readonly PictureBox _claudeChart = MakeUsageChart();
     private readonly PictureBox _claudeCodeChart = MakeUsageChart();
+    private readonly PictureBox _codexPace = MakeUsageChart();
+    private readonly PictureBox _claudePace = MakeUsageChart();
+    private readonly PictureBox _claudeCodePace = MakeUsageChart();
     private readonly Label _claudeCode = MakeLabel();
     private readonly PictureBox _agentPortrait = MakeAgentPortrait();
     private readonly Label _heading = MakeHeading();
     private readonly Label _subheading = MakeLabel(dim: true);
+    private readonly Panel _headerDivider = MakeDivider();
+    private readonly Panel _sourceDivider = MakeDivider();
+    private readonly Panel _sourceDivider2 = MakeDivider();
+    private readonly Panel _footerDivider = MakeDivider();
     private readonly Button _refreshButton = new() { Text = "Refresh", Size = new Size(94, 32) };
     private readonly ToolTip _toolTip = new();
 
@@ -33,20 +42,21 @@ public sealed class DetailsForm : Form
         Font = new Font("Segoe UI", 9f);
         FormBorderStyle = FormBorderStyle.FixedToolWindow;
         StartPosition = FormStartPosition.Manual;
-        ClientSize = new Size(390, 250);
+        ClientSize = new Size(496, 250);
         ShowInTaskbar = false;
         MaximizeBox = false;
         MinimizeBox = false;
 
-        _agentPortrait.SetBounds(16, 12, 68, 68);
-        _heading.SetBounds(96, 18, 278, 26);
-        _subheading.SetBounds(96, 46, 278, 22);
+        _agentPortrait.SetBounds(ContentMargin, ContentMargin, 68, 68);
+        _heading.SetBounds(104, 30, 368, 26);
+        _subheading.SetBounds(104, 58, 368, 22);
+        _headerDivider.SetBounds(ContentMargin, 104, ContentRight - ContentMargin, 1);
         _subheading.Text = "Live weekly allowance monitor";
         _refreshButton.Click += (_, _) => refresh();
-        WireLaunchAction(AgentLauncher.LaunchCodex, "Click to open Codex", _codexIcon, _codex, _codexChart);
-        WireLaunchAction(AgentLauncher.LaunchClaudeDesktop, "Click to open Claude Desktop", _claudeIcon, _claude, _claudeFiveHour, _claudeChart);
-        WireLaunchAction(AgentLauncher.LaunchClaudeCode, "Click to open Command Prompt and run Claude Code", _claudeCodeIcon, _claudeCode, _claudeCodeChart);
-        Controls.AddRange(new Control[] { _agentPortrait, _heading, _subheading, _codexIcon, _claudeIcon, _claudeCodeIcon, _codexChart, _claudeChart, _claudeCodeChart, _codex, _claude, _claudeFiveHour, _claudeCode, _footer, _refreshButton });
+        WireLaunchAction(AgentLauncher.LaunchCodex, "Click to open Codex", _codexIcon, _codex, _codexChart, _codexPace);
+        WireLaunchAction(AgentLauncher.LaunchClaudeDesktop, "Click to open Claude Desktop", _claudeIcon, _claude, _claudeFiveHour, _claudeChart, _claudePace);
+        WireLaunchAction(AgentLauncher.LaunchClaudeCode, "Click to open Command Prompt and run Claude Code", _claudeCodeIcon, _claudeCode, _claudeCodeChart, _claudeCodePace);
+        Controls.AddRange(new Control[] { _agentPortrait, _heading, _subheading, _headerDivider, _sourceDivider, _sourceDivider2, _footerDivider, _codexIcon, _claudeIcon, _claudeCodeIcon, _codexChart, _claudeChart, _claudeCodeChart, _codexPace, _claudePace, _claudeCodePace, _codex, _claude, _claudeFiveHour, _claudeCode, _footer, _refreshButton });
     }
 
     public void PositionNearTray()
@@ -113,26 +123,35 @@ public sealed class DetailsForm : Form
 
     public void UpdateView(UsageSnapshot snapshot, ProviderSettings providers)
     {
-        const int SourceGap = 8;
-        const int FooterGap = 24;
-        int nextRowY = 94;
-        nextRowY = SetServiceRow(providers.Codex, _codexIcon, _codexChart, _codex, snapshot.Codex, nextRowY);
-        if (providers.Codex && providers.ClaudeDesktop) nextRowY += SourceGap;
+        const int DividerGap = 16;
+        int nextRowY = 116;
+        nextRowY = SetServiceRow(providers.Codex, _codexIcon, _codexChart, _codexPace, _codex, snapshot.Codex, nextRowY);
+        int dividerIndex = 0;
+        AddSourceDivider(providers.Codex && providers.ClaudeDesktop, ref nextRowY, ref dividerIndex, DividerGap);
         int claudeRowY = nextRowY;
         bool hasClaudeFiveHour = providers.ClaudeDesktop && snapshot.Claude.FiveHourUsedPercent is not null;
-        nextRowY = SetServiceRow(providers.ClaudeDesktop, _claudeIcon, _claudeChart, _claude, snapshot.Claude, nextRowY, hasClaudeFiveHour);
+        nextRowY = SetServiceRow(providers.ClaudeDesktop, _claudeIcon, _claudeChart, _claudePace, _claude, snapshot.Claude, nextRowY, hasClaudeFiveHour);
         SetClaudeFiveHourRow(providers.ClaudeDesktop, snapshot.Claude, claudeRowY);
         var claudeCode = ServiceUsage.Unavailable("Claude Code", "Launcher ready; live usage reader is not connected yet.");
-        if ((providers.Codex || providers.ClaudeDesktop) && providers.ClaudeCode) nextRowY += SourceGap;
-        nextRowY = SetServiceRow(providers.ClaudeCode, _claudeCodeIcon, _claudeCodeChart, _claudeCode, claudeCode, nextRowY);
-        if (providers.Codex || providers.ClaudeDesktop || providers.ClaudeCode) nextRowY += FooterGap;
+        AddSourceDivider((providers.Codex || providers.ClaudeDesktop) && providers.ClaudeCode, ref nextRowY, ref dividerIndex, DividerGap);
+        nextRowY = SetServiceRow(providers.ClaudeCode, _claudeCodeIcon, _claudeCodeChart, _claudeCodePace, _claudeCode, claudeCode, nextRowY);
+        _sourceDivider.Visible = dividerIndex > 0;
+        _sourceDivider2.Visible = dividerIndex > 1;
+
+        bool hasAnySource = providers.Codex || providers.ClaudeDesktop || providers.ClaudeCode;
+        _footerDivider.Visible = hasAnySource;
+        if (hasAnySource)
+        {
+            _footerDivider.SetBounds(ContentMargin, nextRowY + 8, ContentRight - ContentMargin, 1);
+            nextRowY += 22;
+        }
         int placeholders = CountEnabledPlaceholders(providers);
         _footer.Text = placeholders == 0
             ? $"Updated {snapshot.GeneratedAt:HH:mm:ss}"
             : $"Updated {snapshot.GeneratedAt:HH:mm:ss} · {placeholders} placeholder(s) enabled";
-        _footer.SetBounds(16, nextRowY - 1, 250, 20);
-        _refreshButton.Location = new Point(280, nextRowY - 9);
-        ClientSize = new Size(390, nextRowY + 36);
+        _footer.SetBounds(ContentMargin, nextRowY, 330, 20);
+        _refreshButton.Location = new Point(378, nextRowY - 6);
+        ClientSize = new Size(496, nextRowY + 50);
     }
 
     private static string Format(ServiceUsage usage)
@@ -149,6 +168,21 @@ public sealed class DetailsForm : Form
         ForeColor = dim ? Color.FromArgb(170, 175, 180) : Color.White,
         TextAlign = ContentAlignment.MiddleLeft
     };
+
+    private static Panel MakeDivider() => new()
+    {
+        BackColor = Color.FromArgb(62, 66, 72)
+    };
+
+    private void AddSourceDivider(bool visible, ref int nextRowY, ref int dividerIndex, int gap)
+    {
+        if (!visible) return;
+        Panel divider = dividerIndex == 0 ? _sourceDivider : _sourceDivider2;
+        divider.SetBounds(ContentMargin, nextRowY + gap / 2, ContentRight - ContentMargin, 1);
+        divider.Visible = true;
+        dividerIndex++;
+        nextRowY += gap;
+    }
 
     private static PictureBox MakeServiceIcon(ServiceIcon service) => new()
     {
@@ -186,19 +220,29 @@ public sealed class DetailsForm : Form
         old?.Dispose();
     }
 
-    private static int SetServiceRow(bool visible, PictureBox icon, PictureBox chart, Label text, ServiceUsage usage, int y, bool hasExtraLine = false)
+    private static void SetPaceGauge(PictureBox gauge, ServiceUsage usage)
+    {
+        var old = gauge.Image;
+        gauge.Image = UsagePaceGaugeRenderer.Render(usage);
+        old?.Dispose();
+    }
+
+    private static int SetServiceRow(bool visible, PictureBox icon, PictureBox chart, PictureBox pace, Label text, ServiceUsage usage, int y, bool hasExtraLine = false)
     {
         icon.Visible = visible;
         chart.Visible = visible;
+        pace.Visible = visible;
         text.Visible = visible;
         if (!visible) return y;
 
         int blockHeight = hasExtraLine ? 76 : 54;
-        icon.SetBounds(16, y + (blockHeight - 40) / 2, 40, 40);
-        chart.SetBounds(328, y + (blockHeight - 52) / 2, 52, 52);
-        text.SetBounds(66, y, 260, 54);
+        icon.SetBounds(ContentMargin, y + (blockHeight - 40) / 2, 40, 40);
+        chart.SetBounds(296, y + (blockHeight - 52) / 2, 52, 52);
+        pace.SetBounds(368, y + (blockHeight - 72) / 2, 104, 72);
+        text.SetBounds(74, y, 216, 54);
         text.Text = Format(usage);
         SetChart(chart, usage);
+        SetPaceGauge(pace, usage);
         return y + blockHeight + 6;
     }
 
@@ -313,6 +357,90 @@ internal static class UsagePieRenderer
         if (usage.ResetsAt is not { } resetsAt || usage.WeeklyWindow is not { } weeklyWindow) return null;
         double percent = (resetsAt - DateTime.Now).TotalMinutes / weeklyWindow.TotalMinutes * 100d;
         return (int)Math.Round(Math.Clamp(percent, 0d, 100d));
+    }
+}
+
+internal static class UsagePaceGaugeRenderer
+{
+    private static readonly Color Track = Color.FromArgb(56, 60, 66);
+    private static readonly Color Normal = Color.FromArgb(65, 150, 100);
+    private static readonly Color Warning = Color.FromArgb(241, 205, 76);
+    private static readonly Color Critical = Color.FromArgb(244, 161, 174);
+
+    public static Bitmap Render(ServiceUsage usage)
+    {
+        const int width = 104;
+        const int height = 72;
+        var bitmap = new Bitmap(width, height);
+        using var graphics = Graphics.FromImage(bitmap);
+        graphics.SmoothingMode = SmoothingMode.AntiAlias;
+        graphics.Clear(Color.Transparent);
+
+        // A compact 240° tach sweep: its ends remain inside the canvas instead
+        // of being cut off at the lower edge of the provider row.
+        var dial = new Rectangle(24, 4, 56, 56);
+        using (var track = new Pen(Track, 4f)) graphics.DrawArc(track, dial, 150, 240);
+        DrawBand(graphics, dial, 150, RatioToSweep(1), Normal);
+        DrawBand(graphics, dial, 150 + RatioToSweep(1), RatioToSweep(1.3) - RatioToSweep(1), Warning);
+        DrawBand(graphics, dial, 150 + RatioToSweep(1.3), 240 - RatioToSweep(1.3), Critical);
+
+        foreach (double tickRatio in new[] { 0d, 0.25, 0.5, 1d, 1.3, 2d, 4d, 7d, 10d })
+        {
+            DrawTick(graphics, 150 + RatioToSweep(tickRatio));
+        }
+
+        if (usage.BurnPaceRatio is { } ratio)
+        {
+            // 1.0x is the sustainable pace; the logarithmic dial leaves room up to 10x.
+            float angle = 150 + RatioToSweep(ratio);
+            DrawNeedle(graphics, angle);
+        }
+
+        using var hub = new SolidBrush(Color.FromArgb(91, 185, 255));
+        graphics.FillEllipse(hub, 47, 27, 10, 10);
+        string label = usage.BurnPaceRatio is { } pace ? $"{pace:0.0}x" : "--";
+        using var font = new Font("Segoe UI", 18f, FontStyle.Bold, GraphicsUnit.Pixel);
+        var labelSize = graphics.MeasureString(label, font);
+        using var text = new SolidBrush(Color.White);
+        graphics.DrawString(label, font, text, (width - labelSize.Width) / 2f, 47);
+        return bitmap;
+    }
+
+    private static void DrawBand(Graphics graphics, Rectangle dial, float start, float sweep, Color color)
+    {
+        using var pen = new Pen(color, 4f) { StartCap = LineCap.Flat, EndCap = LineCap.Flat };
+        graphics.DrawArc(pen, dial, start, sweep);
+    }
+
+    private static void DrawTick(Graphics graphics, float degrees)
+    {
+        double radians = degrees * Math.PI / 180d;
+        var center = new PointF(52, 32);
+        // Deliberately cross the coloured 28px-radius band for a proper RPM dial.
+        var outer = new PointF(center.X + (float)(30 * Math.Cos(radians)), center.Y + (float)(30 * Math.Sin(radians)));
+        var inner = new PointF(center.X + (float)(22 * Math.Cos(radians)), center.Y + (float)(22 * Math.Sin(radians)));
+        using var pen = new Pen(Color.FromArgb(165, 170, 178), 1f);
+        graphics.DrawLine(pen, inner, outer);
+    }
+
+    private static void DrawNeedle(Graphics graphics, float degrees)
+    {
+        double radians = degrees * Math.PI / 180d;
+        var center = new PointF(52, 32);
+        var tip = new PointF(center.X + (float)(23 * Math.Cos(radians)), center.Y + (float)(23 * Math.Sin(radians)));
+        using var shadow = new Pen(Color.FromArgb(190, Color.Black), 6f) { StartCap = LineCap.Round, EndCap = LineCap.Round };
+        using var needle = new Pen(Color.FromArgb(59, 183, 255), 3.6f) { StartCap = LineCap.Round, EndCap = LineCap.Round };
+        using var highlight = new Pen(Color.FromArgb(202, 240, 255), 1f) { StartCap = LineCap.Round, EndCap = LineCap.Round };
+        graphics.DrawLine(shadow, center.X + 1, center.Y + 1, tip.X + 1, tip.Y + 1);
+        graphics.DrawLine(needle, center, tip);
+        graphics.DrawLine(highlight, center, tip);
+    }
+
+    private static float RatioToSweep(double ratio)
+    {
+        // A linear 0-10x dial would hide the useful 0-2x range. Logarithmic
+        // spacing keeps the sustainable 1x threshold readable while red ends at 10x.
+        return (float)(Math.Log(1 + Math.Clamp(ratio, 0d, 10d)) / Math.Log(11) * 240d);
     }
 }
 
