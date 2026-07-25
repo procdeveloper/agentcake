@@ -25,7 +25,10 @@ public sealed class UsageReader
             var files = Directory.EnumerateFiles(sessionsDir, "*.jsonl", SearchOption.AllDirectories)
                 .Select(path => new FileInfo(path))
                 .OrderByDescending(file => file.LastWriteTimeUtc)
-                .Take(12);
+                // A plan change can start a fresh session before it has emitted a
+                // limit event. Search a useful history instead of treating the
+                // newest dozen session files as the complete account history.
+                .Take(80);
 
             foreach (var file in files)
             {
@@ -82,22 +85,29 @@ public static class UsageParsers
         try
         {
             using var doc = JsonDocument.Parse(json);
-            var limits = FindNamedObject(doc.RootElement, "rate_limits");
-            if (limits is null) return false;
+            var limitSets = FindNamedObjects(doc.RootElement, "rate_limits", "rateLimits", "rate_limit", "rateLimit", "limits").ToList();
+            if (limitSets.Count == 0) return false;
 
-            var candidates = new List<(JsonElement Window, double Minutes)>();
-            foreach (var name in new[] { "primary", "secondary", "weekly", "seven_day" })
+            var candidates = new List<(JsonElement Window, double Minutes, int NameScore)>();
+            foreach (var limits in limitSets)
             {
-                if (limits.Value.TryGetProperty(name, out var window) && window.ValueKind == JsonValueKind.Object && TryNumber(window, "used_percent", out _))
+                foreach (var property in limits.EnumerateObject())
                 {
-                    _ = TryNumber(window, "window_minutes", out var minutes);
-                    candidates.Add((window, minutes));
+                    var window = property.Value;
+                    if (window.ValueKind != JsonValueKind.Object || !TryReadUsedPercent(window, out _)) continue;
+
+                    candidates.Add((window, ReadWindowMinutes(window), WindowNameScore(property.Name)));
                 }
             }
             if (candidates.Count == 0) return false;
 
-            var weekly = candidates.OrderByDescending(candidate => candidate.Minutes).First();
-            if (!TryNumber(weekly.Window, "used_percent", out var used)) return false;
+            // Codex identifies these windows differently across plans. A real
+            // duration is authoritative; the name is only a tie-breaker.
+            var weekly = candidates
+                .OrderByDescending(candidate => candidate.Minutes)
+                .ThenByDescending(candidate => candidate.NameScore)
+                .First();
+            if (!TryReadUsedPercent(weekly.Window, out var used)) return false;
             TimeSpan? weeklyWindow = weekly.Minutes > 0 ? TimeSpan.FromMinutes(weekly.Minutes) : null;
             usage = new ServiceUsage("Codex", used, ReadReset(weekly.Window), "Live Codex account limit", WeeklyWindow: weeklyWindow);
             return true;
@@ -182,45 +192,104 @@ public static class UsageParsers
         return value.AddTicks(-(value.Ticks % TimeSpan.TicksPerMinute));
     }
 
-    private static JsonElement? FindNamedObject(JsonElement element, string name)
+    private static IEnumerable<JsonElement> FindNamedObjects(JsonElement element, params string[] names)
     {
         if (element.ValueKind == JsonValueKind.Object)
         {
-            if (element.TryGetProperty(name, out var direct) && direct.ValueKind == JsonValueKind.Object) return direct.Clone();
             foreach (var property in element.EnumerateObject())
             {
-                var found = FindNamedObject(property.Value, name);
-                if (found is not null) return found;
+                if (property.Value.ValueKind == JsonValueKind.Object && names.Any(name => string.Equals(name, property.Name, StringComparison.OrdinalIgnoreCase)))
+                    yield return property.Value.Clone();
+                foreach (var found in FindNamedObjects(property.Value, names))
+                    yield return found;
             }
         }
         else if (element.ValueKind == JsonValueKind.Array)
         {
             foreach (var item in element.EnumerateArray())
             {
-                var found = FindNamedObject(item, name);
-                if (found is not null) return found;
+                foreach (var found in FindNamedObjects(item, names))
+                    yield return found;
             }
         }
-        return null;
     }
 
     private static bool TryNumber(JsonElement element, string name, out double value)
     {
         value = 0;
-        return element.TryGetProperty(name, out var property) && property.ValueKind == JsonValueKind.Number && property.TryGetDouble(out value);
+        if (!TryGetProperty(element, name, out var property)) return false;
+        if (property.ValueKind == JsonValueKind.Number) return property.TryGetDouble(out value);
+        return property.ValueKind == JsonValueKind.String && double.TryParse(property.GetString(), System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out value);
     }
+
+    private static bool TryGetProperty(JsonElement element, string name, out JsonElement value)
+    {
+        if (element.TryGetProperty(name, out value)) return true;
+        foreach (var property in element.EnumerateObject())
+        {
+            if (string.Equals(property.Name, name, StringComparison.OrdinalIgnoreCase))
+            {
+                value = property.Value;
+                return true;
+            }
+        }
+        value = default;
+        return false;
+    }
+
+    private static bool TryReadUsedPercent(JsonElement window, out double used)
+    {
+        foreach (var name in new[] { "used_percent", "usedPercent", "usage_percent", "usagePercent", "percent_used", "percentUsed" })
+        {
+            if (TryNumber(window, name, out used) && used is >= 0 and <= 100) return true;
+        }
+
+        foreach (var name in new[] { "remaining_percent", "remainingPercent", "percent_remaining", "percentRemaining" })
+        {
+            if (TryNumber(window, name, out var remaining) && remaining is >= 0 and <= 100)
+            {
+                used = 100 - remaining;
+                return true;
+            }
+        }
+
+        used = 0;
+        return false;
+    }
+
+    private static double ReadWindowMinutes(JsonElement window)
+    {
+        foreach (var name in new[] { "window_minutes", "windowMinutes", "duration_minutes", "durationMinutes" })
+            if (TryNumber(window, name, out var minutes) && minutes > 0) return minutes;
+        foreach (var name in new[] { "window_seconds", "windowSeconds", "duration_seconds", "durationSeconds" })
+            if (TryNumber(window, name, out var seconds) && seconds > 0) return seconds / 60;
+        return 0;
+    }
+
+    private static int WindowNameScore(string name) => name.Contains("week", StringComparison.OrdinalIgnoreCase) || name.Contains("seven", StringComparison.OrdinalIgnoreCase)
+        ? 2
+        : name.Contains("primary", StringComparison.OrdinalIgnoreCase)
+            ? 1
+            : 0;
 
     private static DateTime? ReadReset(JsonElement element)
     {
-        if (!element.TryGetProperty("resets_at", out var reset)) return null;
-        try
+        foreach (var name in new[] { "resets_at", "resetsAt", "reset_at", "resetAt", "next_reset_at", "nextResetAt" })
         {
-            if (reset.ValueKind == JsonValueKind.Number && reset.TryGetInt64(out var unix))
-                return (unix > 100_000_000_000 ? DateTimeOffset.FromUnixTimeMilliseconds(unix) : DateTimeOffset.FromUnixTimeSeconds(unix)).LocalDateTime;
-            if (reset.ValueKind == JsonValueKind.String && DateTimeOffset.TryParse(reset.GetString(), out var parsed))
-                return parsed.LocalDateTime;
+            if (!TryGetProperty(element, name, out var reset)) continue;
+            try
+            {
+                if (reset.ValueKind == JsonValueKind.Number && reset.TryGetInt64(out var unix))
+                    return (unix > 100_000_000_000 ? DateTimeOffset.FromUnixTimeMilliseconds(unix) : DateTimeOffset.FromUnixTimeSeconds(unix)).LocalDateTime;
+                if (reset.ValueKind == JsonValueKind.String)
+                {
+                    if (long.TryParse(reset.GetString(), out var unixText))
+                        return (unixText > 100_000_000_000 ? DateTimeOffset.FromUnixTimeMilliseconds(unixText) : DateTimeOffset.FromUnixTimeSeconds(unixText)).LocalDateTime;
+                    if (DateTimeOffset.TryParse(reset.GetString(), out var parsed)) return parsed.LocalDateTime;
+                }
+            }
+            catch { }
         }
-        catch { }
         return null;
     }
 }

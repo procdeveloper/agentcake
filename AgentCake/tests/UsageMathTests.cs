@@ -16,6 +16,17 @@ public class UsageParserTests
     }
 
     [Fact]
+    public void Codex_accepts_camel_case_remaining_percent_and_second_windows()
+    {
+        const string json = """{ "event": { "rateLimits": { "short": { "usagePercent": 81, "windowSeconds": 18000 }, "weeklyAllowance": { "remainingPercent": 91, "windowSeconds": 604800, "nextResetAt": "1785564999" } } } }""";
+        Assert.True(UsageParsers.TryParseCodexWeekly(json, out var usage));
+        Assert.Equal(9, usage.UsedPercent);
+        Assert.Equal(91, usage.RemainingPercent);
+        Assert.Equal(TimeSpan.FromDays(7), usage.WeeklyWindow);
+        Assert.NotNull(usage.ResetsAt);
+    }
+
+    [Fact]
     public void Claude_Desktop_uses_the_latest_seven_day_sample()
     {
         const string json = """{ "version": 2, "samples": [{ "t": 1784447000000, "u": { "fh": 11, "sd": 83 } }, { "t": 1784447300000, "u": { "fh": 15, "sd": 84 } }] }""";
