@@ -129,6 +129,20 @@ public class UsageParserTests
     }
 
     [Fact]
+    public void Claude_Desktop_calculates_throttle_pace_when_given_a_live_weekly_reset()
+    {
+        DateTime reset = DateTime.Now.AddDays(2);
+        DateTimeOffset now = DateTimeOffset.Now;
+        string json = $$"""{ "version": 2, "samples": [{ "t": {{now.AddHours(-2).ToUnixTimeMilliseconds()}}, "u": { "sd": 47 } }, { "t": {{now.ToUnixTimeMilliseconds()}}, "u": { "sd": 50 } }] }""";
+
+        Assert.True(UsageParsers.TryParseClaudeDesktopWeekly(json, out var usage, reset));
+
+        Assert.Equal(reset, usage.ResetsAt);
+        Assert.NotNull(usage.BurnPaceRatio);
+        Assert.NotNull(usage.BurnRatePercentPerHour);
+    }
+
+    [Fact]
     public void Claude_Desktop_reads_real_reset_timestamps_from_its_live_rate_limit_log()
     {
         const string line = "2026-07-26 12:22:59 [error] Uncaught (in promise) Error: {\"type\":\"exceeded_limit\",\"windows\":{\"5h\":{\"resets_at\":1785069600},\"7d\":{\"resets_at\":1785438000}}}";

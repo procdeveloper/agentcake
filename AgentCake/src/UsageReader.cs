@@ -71,14 +71,18 @@ public sealed class UsageReader
 
         try
         {
-            if (!UsageParsers.TryParseClaudeDesktopWeekly(File.ReadAllText(historyPath), out var usage))
-                return ServiceUsage.Unavailable("Claude", "Claude Desktop has not recorded a weekly usage value yet.");
-
             var realResets = File.Exists(logPath)
                 ? UsageParsers.ReadClaudeDesktopLiveResets(TailLines(logPath))
                 : null;
             DateTime? fiveHourReset = realResets?.FiveHourResetsAt > DateTime.Now ? realResets.FiveHourResetsAt : null;
             DateTime? weeklyReset = realResets?.WeeklyResetsAt > DateTime.Now ? realResets.WeeklyResetsAt : null;
+
+            // Give the pace calculation the same authoritative weekly reset as
+            // the rendered row. Without it, Claude's historical samples have no
+            // reset field to match and the throttle gauge is deliberately blank.
+            if (!UsageParsers.TryParseClaudeDesktopWeekly(File.ReadAllText(historyPath), out var usage, weeklyReset))
+                return ServiceUsage.Unavailable("Claude", "Claude Desktop has not recorded a weekly usage value yet.");
+
             return usage with
             {
                 ResetsAt = weeklyReset,
@@ -181,7 +185,7 @@ public static class UsageParsers
         catch { return false; }
     }
 
-    public static bool TryParseClaudeDesktopWeekly(string json, out ServiceUsage usage)
+    public static bool TryParseClaudeDesktopWeekly(string json, out ServiceUsage usage, DateTime? weeklyResetsAt = null)
     {
         usage = ServiceUsage.Unavailable("Claude", "No Claude Desktop weekly limit.");
         try
@@ -190,7 +194,6 @@ public static class UsageParsers
             if (!doc.RootElement.TryGetProperty("samples", out var samples) || samples.ValueKind != JsonValueKind.Array)
                 return false;
 
-            DateTime? weeklyResetsAt = null;
             DateTime? fiveHourResetsAt = null;
             var weeklySamples = new List<UsageSample>();
             foreach (var sample in samples.EnumerateArray())
