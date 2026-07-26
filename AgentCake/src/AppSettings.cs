@@ -9,6 +9,7 @@ public sealed class AppSettings
     public ProviderSettings Providers { get; set; } = new();
     public string CodexSessionsDir { get; set; } = "";
     public string ClaudeDesktopUsagePath { get; set; } = "";
+    public string ClaudeDesktopLogPath { get; set; } = "";
 
     public static string ConfigDir => Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "AgentCake");
@@ -23,6 +24,12 @@ public sealed class AppSettings
             Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
             "Packages", "Claude_pzs8sxrjxfjjc", "LocalCache", "Roaming", "Claude", "plan-usage-history.json")
         : ClaudeDesktopUsagePath;
+
+    public string ResolveClaudeDesktopLogPath() => string.IsNullOrWhiteSpace(ClaudeDesktopLogPath)
+        ? Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+            "Packages", "Claude_pzs8sxrjxfjjc", "LocalCache", "Roaming", "Claude", "logs", "claude.ai-web.log")
+        : ClaudeDesktopLogPath;
 
     public static AppSettings Load()
     {

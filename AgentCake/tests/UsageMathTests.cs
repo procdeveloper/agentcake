@@ -115,7 +115,7 @@ public class UsageParserTests
     }
 
     [Fact]
-    public void Claude_Desktop_projects_the_next_reset_from_an_observed_weekly_reset()
+    public void Claude_Desktop_does_not_invent_a_reset_from_usage_history()
     {
         const long resetSample = 1784833341006;
         string json = $$"""{ "version": 2, "samples": [{ "t": {{resetSample - 300000}}, "u": { "fh": 94, "sd": 94 } }, { "t": {{resetSample}}, "u": { "fh": 0, "sd": 0 } }, { "t": {{resetSample + 300000}}, "u": { "fh": 33, "sd": 15 } }] }""";
@@ -124,9 +124,19 @@ public class UsageParserTests
         Assert.Equal(15, usage.UsedPercent);
         Assert.Equal(33, usage.FiveHourUsedPercent);
         Assert.Equal(TimeSpan.FromDays(7), usage.WeeklyWindow);
-        var observedReset = DateTimeOffset.FromUnixTimeMilliseconds(resetSample - 150000).LocalDateTime;
-        observedReset = observedReset.AddSeconds(30).AddTicks(-(observedReset.AddSeconds(30).Ticks % TimeSpan.TicksPerMinute));
-        Assert.Equal(observedReset.AddDays(7), usage.ResetsAt);
-        Assert.Equal(observedReset.AddHours(5), usage.FiveHourResetsAt);
+        Assert.Null(usage.ResetsAt);
+        Assert.Null(usage.FiveHourResetsAt);
+    }
+
+    [Fact]
+    public void Claude_Desktop_reads_real_reset_timestamps_from_its_live_rate_limit_log()
+    {
+        const string line = "2026-07-26 12:22:59 [error] Uncaught (in promise) Error: {\"type\":\"exceeded_limit\",\"windows\":{\"5h\":{\"resets_at\":1785069600},\"7d\":{\"resets_at\":1785438000}}}";
+
+        var resets = UsageParsers.ReadClaudeDesktopLiveResets(new[] { line });
+
+        Assert.NotNull(resets);
+        Assert.Equal(DateTimeOffset.FromUnixTimeSeconds(1785069600).LocalDateTime, resets!.FiveHourResetsAt);
+        Assert.Equal(DateTimeOffset.FromUnixTimeSeconds(1785438000).LocalDateTime, resets.WeeklyResetsAt);
     }
 }

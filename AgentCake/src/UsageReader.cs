@@ -13,7 +13,7 @@ public sealed class UsageReader
     public UsageSnapshot Scan()
     {
         var cfg = _settings();
-        return new UsageSnapshot(ReadCodex(cfg.ResolveCodexSessionsDir()), ReadClaudeDesktop(cfg.ResolveClaudeDesktopUsagePath()), DateTime.Now);
+        return new UsageSnapshot(ReadCodex(cfg.ResolveCodexSessionsDir()), ReadClaudeDesktop(cfg.ResolveClaudeDesktopUsagePath(), cfg.ResolveClaudeDesktopLogPath()), DateTime.Now);
     }
 
     private ServiceUsage ReadCodex(string sessionsDir)
@@ -64,16 +64,29 @@ public sealed class UsageReader
         return _lastCodexUsage ?? ServiceUsage.Unavailable("Codex", "No live weekly account-limit record has been written yet.");
     }
 
-    private static ServiceUsage ReadClaudeDesktop(string historyPath)
+    private static ServiceUsage ReadClaudeDesktop(string historyPath, string logPath)
     {
         if (!File.Exists(historyPath))
             return ServiceUsage.Unavailable("Claude", "Claude Desktop plan-usage history was not found. Open Claude Desktop and sign in.");
 
         try
         {
-            return UsageParsers.TryParseClaudeDesktopWeekly(File.ReadAllText(historyPath), out var usage)
-                ? usage
-                : ServiceUsage.Unavailable("Claude", "Claude Desktop has not recorded a weekly usage value yet.");
+            if (!UsageParsers.TryParseClaudeDesktopWeekly(File.ReadAllText(historyPath), out var usage))
+                return ServiceUsage.Unavailable("Claude", "Claude Desktop has not recorded a weekly usage value yet.");
+
+            var realResets = File.Exists(logPath)
+                ? UsageParsers.ReadClaudeDesktopLiveResets(TailLines(logPath))
+                : null;
+            DateTime? fiveHourReset = realResets?.FiveHourResetsAt > DateTime.Now ? realResets.FiveHourResetsAt : null;
+            DateTime? weeklyReset = realResets?.WeeklyResetsAt > DateTime.Now ? realResets.WeeklyResetsAt : null;
+            return usage with
+            {
+                ResetsAt = weeklyReset,
+                FiveHourResetsAt = fiveHourReset,
+                Detail = realResets is null
+                    ? "Live Claude Desktop plan usage; reset time is unavailable until Claude writes a live rate-limit response."
+                    : "Live Claude Desktop plan usage; reset time comes from Claude Desktop's live rate-limit response."
+            };
         }
         catch
         {
@@ -177,8 +190,8 @@ public static class UsageParsers
             if (!doc.RootElement.TryGetProperty("samples", out var samples) || samples.ValueKind != JsonValueKind.Array)
                 return false;
 
-            var weeklyResetsAt = ReadClaudeDesktopReset(samples, "sd", TimeSpan.FromDays(7));
-            var fiveHourResetsAt = ReadClaudeDesktopReset(samples, "fh", TimeSpan.FromHours(5));
+            DateTime? weeklyResetsAt = null;
+            DateTime? fiveHourResetsAt = null;
             var weeklySamples = new List<UsageSample>();
             foreach (var sample in samples.EnumerateArray())
             {
@@ -202,7 +215,7 @@ public static class UsageParsers
                         : null;
                     var liveUsage = new ServiceUsage("Claude", used, weeklyResetsAt, weeklyResetsAt is null
                         ? "Live Claude Desktop plan usage"
-                        : "Live Claude Desktop plan usage; reset times are based on observed usage resets.",
+                        : "Live Claude Desktop plan usage; reset time requires Claude Desktop's live rate-limit response.",
                         fiveHourUsed,
                         fiveHourResetsAt,
                         WeeklyWindow: TimeSpan.FromDays(7));
@@ -220,46 +233,25 @@ public static class UsageParsers
         catch { return false; }
     }
 
-    private static DateTime? ReadClaudeDesktopReset(JsonElement samples, string usageKey, TimeSpan window)
+    // Claude Desktop logs the server's actual reset timestamps with a live
+    // rate-limit response; its plan-usage history intentionally contains only percentages.
+    public static ClaudeLiveResets? ReadClaudeDesktopLiveResets(IEnumerable<string> lines)
     {
-        double? previousUsed = null;
-        long? previousTimestamp = null;
-        DateTime? latestReset = null;
-
-        foreach (var sample in samples.EnumerateArray())
+        foreach (var line in lines.Reverse())
         {
-            if (!sample.TryGetProperty("u", out var usageValues) || usageValues.ValueKind != JsonValueKind.Object
-                || !TryNumber(usageValues, usageKey, out var used)
-                || !TryNumber(sample, "t", out var timestamp))
-                continue;
-
-            // Claude Desktop stores sampled usage but no reset timestamp. A large
-            // drop to near-zero marks the reset window for this specific allowance.
-            if (previousUsed is { } previous && previous >= 50 && used <= 5 && used < previous)
+            int jsonStart = line.LastIndexOf("Error: {", StringComparison.Ordinal);
+            if (jsonStart < 0) continue;
+            try
             {
-                try
-                {
-                    // The reset happened between two five-minute history samples. The
-                    // midpoint avoids presenting the polling offset as the reset time.
-                    long resetTimestamp = previousTimestamp is { } previousTime
-                        ? previousTime + ((long)timestamp - previousTime) / 2
-                        : (long)timestamp;
-                    latestReset = RoundToNearestMinute(DateTimeOffset.FromUnixTimeMilliseconds(resetTimestamp).LocalDateTime);
-                }
-                catch { }
+                using var doc = JsonDocument.Parse(line[(jsonStart + "Error: ".Length)..]);
+                if (!doc.RootElement.TryGetProperty("windows", out var windows) || windows.ValueKind != JsonValueKind.Object) continue;
+                DateTime? fiveHour = windows.TryGetProperty("5h", out var fiveHourWindow) ? ReadReset(fiveHourWindow) : null;
+                DateTime? weekly = windows.TryGetProperty("7d", out var weeklyWindow) ? ReadReset(weeklyWindow) : null;
+                if (fiveHour is not null || weekly is not null) return new ClaudeLiveResets(fiveHour, weekly);
             }
-
-            previousUsed = used;
-            previousTimestamp = (long)timestamp;
+            catch { }
         }
-
-        return latestReset?.Add(window);
-    }
-
-    private static DateTime RoundToNearestMinute(DateTime value)
-    {
-        value = value.AddSeconds(30);
-        return value.AddTicks(-(value.Ticks % TimeSpan.TicksPerMinute));
+        return null;
     }
 
     private static IEnumerable<JsonElement> FindNamedObjects(JsonElement element, params string[] names)
@@ -376,3 +368,5 @@ public static class UsageParsers
         return null;
     }
 }
+
+public sealed record ClaudeLiveResets(DateTime? FiveHourResetsAt, DateTime? WeeklyResetsAt);
