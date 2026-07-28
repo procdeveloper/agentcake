@@ -104,6 +104,19 @@ public class UsageParserTests
     }
 
     [Fact]
+    public void Burn_pace_uses_the_current_week_average_immediately_after_a_reset()
+    {
+        DateTime reset = DateTime.Now.AddDays(6);
+        var current = new ServiceUsage("Codex", 10, reset, "Live", WeeklyWindow: TimeSpan.FromDays(7));
+
+        var pace = UsagePace.Estimate(new[] { new UsageSample(DateTimeOffset.Now, 10, reset) }, current);
+
+        Assert.NotNull(pace);
+        Assert.Equal(10d / 24d, pace!.Value.BurnRatePercentPerHour, 2);
+        Assert.Equal((10d / 24d) / (90d / 144d), pace.Value.BurnPaceRatio, 2);
+    }
+
+    [Fact]
     public void Claude_Desktop_uses_the_latest_seven_day_sample()
     {
         const string json = """{ "version": 2, "samples": [{ "t": 1784447000000, "u": { "fh": 11, "sd": 83 } }, { "t": 1784447300000, "u": { "fh": 15, "sd": 84 } }] }""";

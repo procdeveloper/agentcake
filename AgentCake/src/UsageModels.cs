@@ -41,7 +41,20 @@ internal static class UsagePace
                 && sample.ResetsAt == resetsAt)
             .OrderBy(sample => sample.RecordedAt)
             .ToList();
-        if (ordered.Count < 2) return null;
+        if (ordered.Count < 2)
+        {
+            // Right after a weekly reset there is often only one Codex event in
+            // the new window. The reset time and window length still give us a
+            // real average from the start of that window, so keep the gauge at
+            // a useful 0.0x/starting value instead of rendering it as unknown.
+            if (current.WeeklyWindow is not { } weeklyWindow) return null;
+            double elapsedSinceResetHours = (DateTime.Now - (resetsAt - weeklyWindow)).TotalHours;
+            if (elapsedSinceResetHours <= 0) return null;
+
+            double burnRateSinceReset = currentUsed / elapsedSinceResetHours;
+            double sustainableRateSinceReset = remaining / remainingHours;
+            return sustainableRateSinceReset <= 0 ? null : (burnRateSinceReset, burnRateSinceReset / sustainableRateSinceReset);
+        }
 
         var newest = ordered[^1];
         // A one-day lookback smooths out a single short burst without mixing a
