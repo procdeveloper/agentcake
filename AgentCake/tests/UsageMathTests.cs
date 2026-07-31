@@ -142,6 +142,17 @@ public class UsageParserTests
     }
 
     [Fact]
+    public void Claude_Desktop_observes_a_weekly_rollover_when_the_live_reset_is_unavailable()
+    {
+        DateTimeOffset observedReset = DateTimeOffset.Now.AddDays(-1);
+        string json = $$"""{ "samples": [{ "t": {{observedReset.AddMinutes(-5).ToUnixTimeMilliseconds()}}, "u": { "sd": 91 } }, { "t": {{observedReset.ToUnixTimeMilliseconds()}}, "u": { "sd": 0 } }] }""";
+
+        DateTime? nextReset = UsageParsers.ReadClaudeDesktopObservedWeeklyReset(json);
+
+        Assert.Equal(DateTimeOffset.FromUnixTimeMilliseconds(observedReset.ToUnixTimeMilliseconds()).LocalDateTime.AddDays(7), nextReset);
+    }
+
+    [Fact]
     public void Claude_Desktop_calculates_throttle_pace_when_given_a_live_weekly_reset()
     {
         DateTime reset = DateTime.Now.AddDays(2);

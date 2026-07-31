@@ -71,25 +71,30 @@ public sealed class UsageReader
 
         try
         {
+            string historyJson = File.ReadAllText(historyPath);
             var realResets = File.Exists(logPath)
                 ? UsageParsers.ReadClaudeDesktopLiveResets(TailLines(logPath))
                 : null;
             DateTime? fiveHourReset = realResets?.FiveHourResetsAt > DateTime.Now ? realResets.FiveHourResetsAt : null;
-            DateTime? weeklyReset = realResets?.WeeklyResetsAt > DateTime.Now ? realResets.WeeklyResetsAt : null;
+            DateTime? liveWeeklyReset = realResets?.WeeklyResetsAt > DateTime.Now ? realResets.WeeklyResetsAt : null;
+            DateTime? observedWeeklyReset = UsageParsers.ReadClaudeDesktopObservedWeeklyReset(historyJson);
+            DateTime? weeklyReset = liveWeeklyReset ?? observedWeeklyReset;
 
             // Give the pace calculation the same authoritative weekly reset as
             // the rendered row. Without it, Claude's historical samples have no
             // reset field to match and the throttle gauge is deliberately blank.
-            if (!UsageParsers.TryParseClaudeDesktopWeekly(File.ReadAllText(historyPath), out var usage, weeklyReset))
+            if (!UsageParsers.TryParseClaudeDesktopWeekly(historyJson, out var usage, weeklyReset))
                 return ServiceUsage.Unavailable("Claude", "Claude Desktop has not recorded a weekly usage value yet.");
 
             return usage with
             {
                 ResetsAt = weeklyReset,
                 FiveHourResetsAt = fiveHourReset,
-                Detail = realResets is null
-                    ? "Live Claude Desktop plan usage; reset time is unavailable until Claude writes a live rate-limit response."
-                    : "Live Claude Desktop plan usage; reset time comes from Claude Desktop's live rate-limit response."
+                Detail = liveWeeklyReset is not null
+                    ? "Live Claude Desktop plan usage; weekly reset time comes from Claude Desktop's live rate-limit response."
+                    : observedWeeklyReset is not null
+                        ? "Live Claude Desktop plan usage; weekly reset was observed in Claude Desktop's own usage history."
+                        : "Live Claude Desktop plan usage; reset time is unavailable until Claude writes a live rate-limit response."
             };
         }
         catch
@@ -234,6 +239,43 @@ public static class UsageParsers
             return false;
         }
         catch { return false; }
+    }
+
+    public static DateTime? ReadClaudeDesktopObservedWeeklyReset(string json)
+    {
+        try
+        {
+            using var doc = JsonDocument.Parse(json);
+            if (!doc.RootElement.TryGetProperty("samples", out var samples) || samples.ValueKind != JsonValueKind.Array)
+                return null;
+
+            double? previousUsed = null;
+            DateTime? nextReset = null;
+            foreach (var sample in samples.EnumerateArray())
+            {
+                if (!sample.TryGetProperty("u", out var usageValues) || usageValues.ValueKind != JsonValueKind.Object
+                    || !TryNumber(usageValues, "sd", out var used)
+                    || !TryNumber(sample, "t", out var timestamp)) continue;
+
+                // Claude Desktop does not retain a forward reset timestamp once
+                // a window is healthy again, but its own history records the
+                // rollover as a large weekly-usage drop. This is a fallback to
+                // that observed event, never a guessed clock or a small correction.
+                if (previousUsed is { } previous && used < previous - 5)
+                {
+                    try
+                    {
+                        DateTime candidate = DateTimeOffset.FromUnixTimeMilliseconds((long)timestamp).LocalDateTime.AddDays(7);
+                        if (candidate > DateTime.Now) nextReset = candidate;
+                    }
+                    catch { }
+                }
+
+                previousUsed = used;
+            }
+            return nextReset;
+        }
+        catch { return null; }
     }
 
     // Claude Desktop logs the server's actual reset timestamps with a live
