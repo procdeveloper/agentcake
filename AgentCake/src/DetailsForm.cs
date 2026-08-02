@@ -2,6 +2,7 @@ using System.Drawing;
 using System.Drawing.Drawing2D;
 using System.Diagnostics;
 using System.Runtime.InteropServices;
+using WindowsDesktop;
 
 namespace AgentCake;
 
@@ -31,7 +32,20 @@ public sealed class DetailsForm : Form
     private readonly Panel _sourceDivider2 = MakeDivider();
     private readonly Panel _footerDivider = MakeDivider();
     private readonly Button _refreshButton = new() { Text = "Refresh", Size = new Size(94, 32) };
+    private readonly Button _hideButton = new()
+    {
+        Text = "×",
+        Size = new Size(28, 28),
+        Anchor = AnchorStyles.Top | AnchorStyles.Right,
+        BackColor = Color.FromArgb(54, 57, 62),
+        ForeColor = Color.White,
+        FlatStyle = FlatStyle.Flat,
+        Font = new Font("Segoe UI", 14f, FontStyle.Regular, GraphicsUnit.Pixel),
+        Visible = false
+    };
     private readonly ToolTip _toolTip = new();
+    private bool _stayOnTop;
+    private Point? _dragOrigin;
 
     public DetailsForm(Action refresh)
     {
@@ -46,6 +60,7 @@ public sealed class DetailsForm : Form
         ShowInTaskbar = false;
         MaximizeBox = false;
         MinimizeBox = false;
+        KeyPreview = true;
 
         _agentPortrait.SetBounds(ContentMargin, ContentMargin, 68, 68);
         _heading.SetBounds(104, 30, 368, 26);
@@ -53,10 +68,39 @@ public sealed class DetailsForm : Form
         _headerDivider.SetBounds(ContentMargin, 104, ContentRight - ContentMargin, 1);
         _subheading.Text = "Live weekly allowance monitor";
         _refreshButton.Click += (_, _) => refresh();
+        _hideButton.Location = new Point(ClientSize.Width - _hideButton.Width - 6, 6);
+        _hideButton.Click += (_, _) => Hide();
+        _toolTip.SetToolTip(_hideButton, "Hide AgentCake (stay-on-top remains enabled)");
+        KeyDown += (_, eventArgs) =>
+        {
+            if (TopMost && eventArgs.KeyCode == Keys.Escape)
+            {
+                Hide();
+                eventArgs.Handled = true;
+            }
+        };
         WireLaunchAction(AgentLauncher.LaunchCodex, "Click to open Codex", _codexIcon, _codex, _codexChart, _codexPace);
         WireLaunchAction(AgentLauncher.LaunchClaudeDesktop, "Click to open Claude Desktop", _claudeIcon, _claude, _claudeFiveHour, _claudeChart, _claudePace);
         WireLaunchAction(AgentLauncher.LaunchClaudeCode, "Click to open Command Prompt and run Claude Code", _claudeCodeIcon, _claudeCode, _claudeCodeChart, _claudeCodePace);
-        Controls.AddRange(new Control[] { _agentPortrait, _heading, _subheading, _headerDivider, _sourceDivider, _sourceDivider2, _footerDivider, _codexIcon, _claudeIcon, _claudeCodeIcon, _codexChart, _claudeChart, _claudeCodeChart, _codexPace, _claudePace, _claudeCodePace, _codex, _claude, _claudeFiveHour, _claudeCode, _footer, _refreshButton });
+        Controls.AddRange(new Control[] { _agentPortrait, _heading, _subheading, _hideButton, _headerDivider, _sourceDivider, _sourceDivider2, _footerDivider, _codexIcon, _claudeIcon, _claudeCodeIcon, _codexChart, _claudeChart, _claudeCodeChart, _codexPace, _claudePace, _claudeCodePace, _codex, _claude, _claudeFiveHour, _claudeCode, _footer, _refreshButton });
+        WireWindowDragAnywhere();
+    }
+
+    public void ApplyWindowMode(bool stayOnTop)
+    {
+        // Borderless is tied to the persistent mode so an always-visible panel
+        // never wastes space on a Windows title bar.
+        _stayOnTop = stayOnTop;
+        FormBorderStyle = stayOnTop ? FormBorderStyle.None : FormBorderStyle.FixedToolWindow;
+        TopMost = stayOnTop;
+        _hideButton.Visible = stayOnTop;
+        ApplyVirtualDesktopPin();
+    }
+
+    protected override void OnShown(EventArgs eventArgs)
+    {
+        base.OnShown(eventArgs);
+        ApplyVirtualDesktopPin();
     }
 
     public void PositionNearTray()
@@ -109,6 +153,12 @@ public sealed class DetailsForm : Form
 
     [DllImport("user32.dll")]
     private static extern bool GetWindowRect(IntPtr handle, out Rect rect);
+
+    [DllImport("user32.dll")]
+    private static extern bool ReleaseCapture();
+
+    [DllImport("user32.dll")]
+    private static extern IntPtr SendMessage(IntPtr handle, int message, IntPtr wParam, IntPtr lParam);
 
     [StructLayout(LayoutKind.Sequential)]
     private struct Rect
@@ -278,6 +328,59 @@ public sealed class DetailsForm : Form
             control.Cursor = Cursors.Hand;
             _toolTip.SetToolTip(control, tooltip);
             control.Click += (_, _) => launch();
+        }
+    }
+
+    private void WireWindowDragAnywhere()
+    {
+        WireWindowDrag(this);
+        foreach (Control control in Controls) WireWindowDrag(control);
+    }
+
+    private void WireWindowDrag(Control control)
+    {
+        control.MouseDown += (_, eventArgs) =>
+        {
+            if (_stayOnTop && eventArgs.Button == MouseButtons.Left)
+                _dragOrigin = Control.MousePosition;
+        };
+        control.MouseUp += (_, _) => _dragOrigin = null;
+        control.MouseMove += (_, eventArgs) =>
+        {
+            if (!_stayOnTop || _dragOrigin is not { } origin || eventArgs.Button != MouseButtons.Left) return;
+
+            Size threshold = SystemInformation.DragSize;
+            Point current = Control.MousePosition;
+            if (Math.Abs(current.X - origin.X) < threshold.Width / 2
+                && Math.Abs(current.Y - origin.Y) < threshold.Height / 2) return;
+
+            // Preserve normal control clicks until the pointer actually moves.
+            // Once it does, hand off to Windows' native title-bar drag behaviour.
+            _dragOrigin = null;
+            ReleaseCapture();
+            SendMessage(Handle, 0xA1, (IntPtr)2, IntPtr.Zero); // WM_NCLBUTTONDOWN / HTCAPTION
+        };
+        control.MouseCaptureChanged += (_, _) =>
+        {
+            if (!Control.MouseButtons.HasFlag(MouseButtons.Left)) _dragOrigin = null;
+        };
+    }
+
+    private void ApplyVirtualDesktopPin()
+    {
+        if (!IsHandleCreated) return;
+        try
+        {
+            // Pinning makes this panel visible on every Windows virtual desktop;
+            // TopMost alone only affects z-order on its current desktop.
+            if (_stayOnTop) VirtualDesktop.PinWindow(Handle);
+            else VirtualDesktop.UnpinWindow(Handle);
+        }
+        catch (Exception exception)
+        {
+            // Windows keeps the pinning interface internal and changes its IDs
+            // between builds. The normal stay-on-top mode must still be safe.
+            CrashLog.Write("Virtual-desktop pinning is unavailable", exception);
         }
     }
 }

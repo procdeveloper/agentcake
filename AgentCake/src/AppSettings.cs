@@ -6,6 +6,7 @@ public sealed class AppSettings
 {
     public int RefreshSeconds { get; set; } = 30;
     public bool ShowUsageBarsInTray { get; set; } = false;
+    public bool StayOnTop { get; set; } = false;
     public ProviderSettings Providers { get; set; } = new();
     public string CodexSessionsDir { get; set; } = "";
     public string ClaudeDesktopUsagePath { get; set; } = "";

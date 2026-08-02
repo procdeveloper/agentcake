@@ -95,6 +95,9 @@ public sealed class TrayAppContext : ApplicationContext
         var bars = new ToolStripMenuItem("Show usage bars in tray") { Checked = _settings.ShowUsageBarsInTray, CheckOnClick = true };
         bars.Click += (_, _) => SetUsageBarsInTray(bars.Checked);
         menu.Items.Add(bars);
+        var stayOnTop = new ToolStripMenuItem("Stay on top (borderless)") { Checked = _settings.StayOnTop, CheckOnClick = true };
+        stayOnTop.Click += (_, _) => SetStayOnTop(stayOnTop.Checked);
+        menu.Items.Add(stayOnTop);
         var startup = new ToolStripMenuItem("Run at login") { Checked = IsRunAtLogin(), CheckOnClick = true };
         startup.Click += (_, _) => SetRunAtLogin(startup.Checked);
         menu.Items.Add(startup);
@@ -105,13 +108,16 @@ public sealed class TrayAppContext : ApplicationContext
 
     private void ShowDetails()
     {
+        bool created = false;
         if (_details is null || _details.IsDisposed)
         {
             _details = new DetailsForm(KickScan);
             _details.FormClosed += (_, _) => _details = null;
+            created = true;
         }
+        _details.ApplyWindowMode(_settings.StayOnTop);
         if (_last is not null) _details.UpdateView(_last, _settings.Providers);
-        _details.PositionNearTray();
+        if (created) _details.PositionNearTray();
         _details.Show();
         _details.Activate();
     }
@@ -130,6 +136,13 @@ public sealed class TrayAppContext : ApplicationContext
         _settings.ShowUsageBarsInTray = enabled;
         _settings.Save();
         if (_last is not null) ApplySnapshot(_last);
+    }
+
+    private void SetStayOnTop(bool enabled)
+    {
+        _settings.StayOnTop = enabled;
+        _settings.Save();
+        _details?.ApplyWindowMode(enabled);
     }
 
     private List<ServiceUsage> GetEnabledLive(UsageSnapshot snapshot)

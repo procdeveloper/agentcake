@@ -3,7 +3,7 @@
   <PropertyGroup>
     <OutputType>WinExe</OutputType>
     <!-- Matches the installed .NET 10 SDK. Drop to net8.0-windows if you install the .NET 8 packs. -->
-    <TargetFramework>net10.0-windows</TargetFramework>
+    <TargetFramework>net10.0-windows10.0.19041.0</TargetFramework>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <UseWindowsForms>true</UseWindowsForms>
@@ -11,12 +11,14 @@
     <RootNamespace>AgentCake</RootNamespace>
     <!-- High-DPI crispness for the dynamically rendered tray glyph. -->
     <ApplicationHighDpiMode>PerMonitorV2</ApplicationHighDpiMode>
-    <Version>0.1.15</Version>
+    <Version>0.1.18</Version>
     <Product>AgentCake</Product>
     <!-- System.Text.Json ships in the shared framework, so no NuGet restore is needed. -->
   </PropertyGroup>
 
   <ItemGroup>
+    <!-- Pin the borderless panel across virtual desktops when stay-on-top is enabled. -->
+    <PackageReference Include="Slions.VirtualDesktop" Version="6.9.2" />
     <Content Include="assets\\agentcake-profile.png">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </Content>
