@@ -157,6 +157,7 @@ public sealed class TrayAppContext : ApplicationContext
     {
         var menu = new ToolStripMenuItem("Providers");
         AddProvider(menu, "Codex", () => _settings.Providers.Codex, value => _settings.Providers.Codex = value);
+        AddProvider(menu, "Codex Spark", () => _settings.Providers.CodexSpark, value => _settings.Providers.CodexSpark = value);
         AddProvider(menu, "Claude Desktop", () => _settings.Providers.ClaudeDesktop, value => _settings.Providers.ClaudeDesktop = value);
         menu.DropDownItems.Add(new ToolStripSeparator());
         AddProvider(menu, "Claude Code (placeholder)", () => _settings.Providers.ClaudeCode, value => _settings.Providers.ClaudeCode = value);

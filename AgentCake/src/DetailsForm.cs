@@ -2,25 +2,27 @@ using System.Drawing;
 using System.Drawing.Drawing2D;
 using System.Diagnostics;
 using System.Runtime.InteropServices;
-using WindowsDesktop;
 
 namespace AgentCake;
 
 public sealed class DetailsForm : Form
 {
     private const int ContentMargin = 24;
-    private const int ContentRight = 472;
+    private const int ContentRight = 616;
     private readonly Label _codex = MakeLabel();
+    private readonly Label _codexSpark = MakeLabel();
     private readonly Label _claude = MakeLabel();
-    private readonly Label _claudeFiveHour = MakeLabel();
     private readonly Label _footer = MakeLabel(dim: true);
     private readonly PictureBox _codexIcon = MakeServiceIcon(ServiceIcon.Codex);
+    private readonly PictureBox _codexSparkIcon = MakeServiceIcon(ServiceIcon.Codex);
     private readonly PictureBox _claudeIcon = MakeServiceIcon(ServiceIcon.Claude);
     private readonly PictureBox _claudeCodeIcon = MakeServiceIcon(ServiceIcon.ClaudeCode);
     private readonly PictureBox _codexChart = MakeUsageChart();
+    private readonly PictureBox _codexSparkChart = MakeUsageChart();
     private readonly PictureBox _claudeChart = MakeUsageChart();
     private readonly PictureBox _claudeCodeChart = MakeUsageChart();
     private readonly PictureBox _codexPace = MakeUsageChart();
+    private readonly PictureBox _codexSparkPace = MakeUsageChart();
     private readonly PictureBox _claudePace = MakeUsageChart();
     private readonly PictureBox _claudeCodePace = MakeUsageChart();
     private readonly Label _claudeCode = MakeLabel();
@@ -30,17 +32,18 @@ public sealed class DetailsForm : Form
     private readonly Panel _headerDivider = MakeDivider();
     private readonly Panel _sourceDivider = MakeDivider();
     private readonly Panel _sourceDivider2 = MakeDivider();
+    private readonly Panel _sourceDivider3 = MakeDivider();
     private readonly Panel _footerDivider = MakeDivider();
     private readonly Button _refreshButton = new() { Text = "Refresh", Size = new Size(94, 32) };
     private readonly Button _hideButton = new()
     {
         Text = "×",
-        Size = new Size(28, 28),
+        Size = new Size(30, 30),
         Anchor = AnchorStyles.Top | AnchorStyles.Right,
         BackColor = Color.FromArgb(54, 57, 62),
         ForeColor = Color.White,
         FlatStyle = FlatStyle.Flat,
-        Font = new Font("Segoe UI", 14f, FontStyle.Regular, GraphicsUnit.Pixel),
+        Font = new Font("Segoe UI Symbol", 18f, FontStyle.Regular, GraphicsUnit.Pixel),
         Visible = false
     };
     private readonly ToolTip _toolTip = new();
@@ -56,18 +59,22 @@ public sealed class DetailsForm : Form
         Font = new Font("Segoe UI", 9f);
         FormBorderStyle = FormBorderStyle.FixedToolWindow;
         StartPosition = FormStartPosition.Manual;
-        ClientSize = new Size(496, 250);
+        ClientSize = new Size(640, 250);
         ShowInTaskbar = false;
         MaximizeBox = false;
         MinimizeBox = false;
         KeyPreview = true;
 
         _agentPortrait.SetBounds(ContentMargin, ContentMargin, 68, 68);
-        _heading.SetBounds(104, 30, 368, 26);
-        _subheading.SetBounds(104, 58, 368, 22);
+        _heading.SetBounds(104, 30, 512, 26);
+        _subheading.SetBounds(104, 58, 512, 22);
         _headerDivider.SetBounds(ContentMargin, 104, ContentRight - ContentMargin, 1);
         _subheading.Text = "Live weekly allowance monitor";
         _refreshButton.Click += (_, _) => refresh();
+        _hideButton.Text = "\u00d7";
+        _hideButton.FlatAppearance.BorderSize = 0;
+        _hideButton.FlatAppearance.MouseOverBackColor = Color.FromArgb(82, 86, 92);
+        _hideButton.FlatAppearance.MouseDownBackColor = Color.FromArgb(104, 108, 114);
         _hideButton.Location = new Point(ClientSize.Width - _hideButton.Width - 6, 6);
         _hideButton.Click += (_, _) => Hide();
         _toolTip.SetToolTip(_hideButton, "Hide AgentCake (stay-on-top remains enabled)");
@@ -80,9 +87,10 @@ public sealed class DetailsForm : Form
             }
         };
         WireLaunchAction(AgentLauncher.LaunchCodex, "Click to open Codex", _codexIcon, _codex, _codexChart, _codexPace);
-        WireLaunchAction(AgentLauncher.LaunchClaudeDesktop, "Click to open Claude Desktop", _claudeIcon, _claude, _claudeFiveHour, _claudeChart, _claudePace);
+        WireLaunchAction(AgentLauncher.LaunchCodex, "Click to open Codex", _codexSparkIcon, _codexSpark, _codexSparkChart, _codexSparkPace);
+        WireLaunchAction(AgentLauncher.LaunchClaudeDesktop, "Click to open Claude Desktop", _claudeIcon, _claude, _claudeChart, _claudePace);
         WireLaunchAction(AgentLauncher.LaunchClaudeCode, "Click to open Command Prompt and run Claude Code", _claudeCodeIcon, _claudeCode, _claudeCodeChart, _claudeCodePace);
-        Controls.AddRange(new Control[] { _agentPortrait, _heading, _subheading, _hideButton, _headerDivider, _sourceDivider, _sourceDivider2, _footerDivider, _codexIcon, _claudeIcon, _claudeCodeIcon, _codexChart, _claudeChart, _claudeCodeChart, _codexPace, _claudePace, _claudeCodePace, _codex, _claude, _claudeFiveHour, _claudeCode, _footer, _refreshButton });
+        Controls.AddRange(new Control[] { _agentPortrait, _heading, _subheading, _hideButton, _headerDivider, _sourceDivider, _sourceDivider2, _sourceDivider3, _footerDivider, _codexIcon, _codexSparkIcon, _claudeIcon, _claudeCodeIcon, _codexChart, _codexSparkChart, _claudeChart, _claudeCodeChart, _codexPace, _codexSparkPace, _claudePace, _claudeCodePace, _codex, _codexSpark, _claude, _claudeCode, _footer, _refreshButton });
         WireWindowDragAnywhere();
     }
 
@@ -94,13 +102,6 @@ public sealed class DetailsForm : Form
         FormBorderStyle = stayOnTop ? FormBorderStyle.None : FormBorderStyle.FixedToolWindow;
         TopMost = stayOnTop;
         _hideButton.Visible = stayOnTop;
-        ApplyVirtualDesktopPin();
-    }
-
-    protected override void OnShown(EventArgs eventArgs)
-    {
-        base.OnShown(eventArgs);
-        ApplyVirtualDesktopPin();
     }
 
     public void PositionNearTray()
@@ -175,20 +176,21 @@ public sealed class DetailsForm : Form
     {
         const int DividerGap = 16;
         int nextRowY = 116;
-        nextRowY = SetServiceRow(providers.Codex, _codexIcon, _codexChart, _codexPace, _codex, snapshot.Codex, nextRowY);
         int dividerIndex = 0;
-        AddSourceDivider(providers.Codex && providers.ClaudeDesktop, ref nextRowY, ref dividerIndex, DividerGap);
-        int claudeRowY = nextRowY;
-        bool hasClaudeFiveHour = providers.ClaudeDesktop && snapshot.Claude.FiveHourUsedPercent is not null;
-        nextRowY = SetServiceRow(providers.ClaudeDesktop, _claudeIcon, _claudeChart, _claudePace, _claude, snapshot.Claude, nextRowY, hasClaudeFiveHour);
-        SetClaudeFiveHourRow(providers.ClaudeDesktop, snapshot.Claude, claudeRowY);
+        bool hasPrevious = false;
+        AddRow(providers.Codex, _codexIcon, _codexChart, _codexPace, _codex, snapshot.Codex, ref nextRowY, ref hasPrevious, ref dividerIndex, DividerGap);
+        // An enabled source must remain visible even before its first event in
+        // this process. Hiding Spark made it look as though its provider switch
+        // had been ignored after an AgentCake restart.
+        AddRow(providers.CodexSpark, _codexSparkIcon, _codexSparkChart, _codexSparkPace, _codexSpark, snapshot.CodexSpark, ref nextRowY, ref hasPrevious, ref dividerIndex, DividerGap);
+        AddRow(providers.ClaudeDesktop, _claudeIcon, _claudeChart, _claudePace, _claude, snapshot.Claude, ref nextRowY, ref hasPrevious, ref dividerIndex, DividerGap);
         var claudeCode = ServiceUsage.Unavailable("Claude Code", "Launcher ready; live usage reader is not connected yet.");
-        AddSourceDivider((providers.Codex || providers.ClaudeDesktop) && providers.ClaudeCode, ref nextRowY, ref dividerIndex, DividerGap);
-        nextRowY = SetServiceRow(providers.ClaudeCode, _claudeCodeIcon, _claudeCodeChart, _claudeCodePace, _claudeCode, claudeCode, nextRowY);
+        AddRow(providers.ClaudeCode, _claudeCodeIcon, _claudeCodeChart, _claudeCodePace, _claudeCode, claudeCode, ref nextRowY, ref hasPrevious, ref dividerIndex, DividerGap);
         _sourceDivider.Visible = dividerIndex > 0;
         _sourceDivider2.Visible = dividerIndex > 1;
+        _sourceDivider3.Visible = dividerIndex > 2;
 
-        bool hasAnySource = providers.Codex || providers.ClaudeDesktop || providers.ClaudeCode;
+        bool hasAnySource = hasPrevious;
         _footerDivider.Visible = hasAnySource;
         if (hasAnySource)
         {
@@ -199,17 +201,19 @@ public sealed class DetailsForm : Form
         _footer.Text = placeholders == 0
             ? $"Updated {snapshot.GeneratedAt:HH:mm:ss}"
             : $"Updated {snapshot.GeneratedAt:HH:mm:ss} · {placeholders} placeholder(s) enabled";
-        _footer.SetBounds(ContentMargin, nextRowY, 330, 20);
-        _refreshButton.Location = new Point(378, nextRowY - 6);
-        ClientSize = new Size(496, nextRowY + 50);
+        _footer.SetBounds(ContentMargin, nextRowY, 466, 20);
+        _refreshButton.Location = new Point(522, nextRowY - 6);
+        ClientSize = new Size(640, nextRowY + 50);
     }
 
     private static string Format(ServiceUsage usage)
     {
         if (usage.RemainingPercent is not { } remaining) return $"{usage.Service}: unavailable\n{usage.Detail}";
         string reset = usage.ResetsAt is { } at ? $" · resets {at:ddd HH:mm}" : "";
-        string windowLabel = usage.FiveHourUsedPercent is null ? "" : "7d: ";
-        return $"{usage.Service}: {remaining}% remaining\n{windowLabel}{usage.UsedPercent:0.#}% used{reset}";
+        string weekly = $"{(usage.FiveHourUsedPercent is null ? "" : "7d: ")}{usage.UsedPercent:0.#}% used{reset}";
+        if (usage.FiveHourRemainingPercent is not { } fiveHourRemaining) return $"{usage.Service}: {remaining}% remaining\n{weekly}";
+        string fiveHourReset = usage.FiveHourResetsAt is { } fiveHourAt ? $" · resets {fiveHourAt:ddd HH:mm}" : "";
+        return $"{usage.Service}: {remaining}% remaining\n{weekly}\n5h: {fiveHourRemaining}% remaining{fiveHourReset}";
     }
 
     private static Label MakeLabel(bool dim = false) => new()
@@ -227,11 +231,18 @@ public sealed class DetailsForm : Form
     private void AddSourceDivider(bool visible, ref int nextRowY, ref int dividerIndex, int gap)
     {
         if (!visible) return;
-        Panel divider = dividerIndex == 0 ? _sourceDivider : _sourceDivider2;
+        Panel divider = dividerIndex switch { 0 => _sourceDivider, 1 => _sourceDivider2, _ => _sourceDivider3 };
         divider.SetBounds(ContentMargin, nextRowY + gap / 2, ContentRight - ContentMargin, 1);
         divider.Visible = true;
         dividerIndex++;
         nextRowY += gap;
+    }
+
+    private void AddRow(bool visible, PictureBox icon, PictureBox chart, PictureBox pace, Label text, ServiceUsage usage, ref int nextRowY, ref bool hasPrevious, ref int dividerIndex, int dividerGap)
+    {
+        if (visible && hasPrevious) AddSourceDivider(true, ref nextRowY, ref dividerIndex, dividerGap);
+        nextRowY = SetServiceRow(visible, icon, chart, pace, text, usage, nextRowY);
+        if (visible) hasPrevious = true;
     }
 
     private static PictureBox MakeServiceIcon(ServiceIcon service) => new()
@@ -285,30 +296,17 @@ public sealed class DetailsForm : Form
         text.Visible = visible;
         if (!visible) return y;
 
-        int blockHeight = hasExtraLine ? 76 : 54;
+        int blockHeight = usage.FiveHourUsedPercent is not null ? 78 : hasExtraLine ? 76 : 54;
         icon.SetBounds(ContentMargin, y + (blockHeight - 40) / 2, 40, 40);
-        chart.SetBounds(296, y + (blockHeight - 52) / 2, 52, 52);
-        pace.SetBounds(368, y + (blockHeight - 72) / 2, 104, 72);
-        text.SetBounds(74, y, 216, 54);
+        chart.SetBounds(422, y + (blockHeight - 52) / 2, 52, 52);
+        pace.SetBounds(494, y + (blockHeight - 72) / 2, 104, 72);
+        text.SetBounds(74, y, 338, blockHeight);
         text.Text = Format(usage);
         SetChart(chart, usage);
         SetPaceGauge(pace, usage);
         return y + blockHeight + 6;
     }
 
-    private void SetClaudeFiveHourRow(bool visible, ServiceUsage usage, int sourceTop)
-    {
-        if (!visible || usage.FiveHourUsedPercent is not { } fiveHourUsed)
-        {
-            _claudeFiveHour.Visible = false;
-            return;
-        }
-
-        string reset = usage.FiveHourResetsAt is { } at ? $" - resets {at:HH:mm}" : "";
-        _claudeFiveHour.Text = $"5h: {fiveHourUsed:0.#}% used{reset}";
-        _claudeFiveHour.SetBounds(66, sourceTop + 52, 260, 22);
-        _claudeFiveHour.Visible = true;
-    }
 
     private static int CountEnabledPlaceholders(ProviderSettings providers) => new[]
     {
@@ -366,23 +364,6 @@ public sealed class DetailsForm : Form
         };
     }
 
-    private void ApplyVirtualDesktopPin()
-    {
-        if (!IsHandleCreated) return;
-        try
-        {
-            // Pinning makes this panel visible on every Windows virtual desktop;
-            // TopMost alone only affects z-order on its current desktop.
-            if (_stayOnTop) VirtualDesktop.PinWindow(Handle);
-            else VirtualDesktop.UnpinWindow(Handle);
-        }
-        catch (Exception exception)
-        {
-            // Windows keeps the pinning interface internal and changes its IDs
-            // between builds. The normal stay-on-top mode must still be safe.
-            CrashLog.Write("Virtual-desktop pinning is unavailable", exception);
-        }
-    }
 }
 
 internal static class UsagePieRenderer

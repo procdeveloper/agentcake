@@ -60,6 +60,7 @@ public sealed class AppSettings
 public sealed class ProviderSettings
 {
     public bool Codex { get; set; } = true;
+    public bool CodexSpark { get; set; } = true;
     public bool ClaudeDesktop { get; set; } = true;
     public bool ClaudeCode { get; set; } = false;
     public bool ChatGpt { get; set; } = false;

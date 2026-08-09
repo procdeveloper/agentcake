@@ -22,7 +22,7 @@ public sealed record ServiceUsage(
     public static ServiceUsage Unavailable(string service, string detail) => new(service, null, null, detail);
 }
 
-public sealed record UsageSnapshot(ServiceUsage Codex, ServiceUsage Claude, DateTime GeneratedAt);
+public sealed record UsageSnapshot(ServiceUsage Codex, ServiceUsage CodexSpark, ServiceUsage Claude, DateTime GeneratedAt);
 
 internal sealed record UsageSample(DateTimeOffset RecordedAt, double UsedPercent, DateTime? ResetsAt);
 
@@ -65,7 +65,19 @@ internal static class UsagePace
 
         double elapsedHours = (newest.RecordedAt - baseline.RecordedAt).TotalHours;
         double usedDelta = newest.UsedPercent - baseline.UsedPercent;
-        if (elapsedHours <= 0 || usedDelta < 0.25) return null;
+        if (elapsedHours <= 0) return null;
+        if (usedDelta < 0.25)
+        {
+            // A reset can produce several identical 0%-usage events before
+            // Codex spends anything. Keep the dial explicit at 0.0x instead
+            // of treating that real, quiet state as an unknown rate.
+            if (current.WeeklyWindow is not { } weeklyWindow) return null;
+            double elapsedSinceResetHours = (DateTime.Now - (resetsAt - weeklyWindow)).TotalHours;
+            if (elapsedSinceResetHours <= 0) return null;
+            double burnRateSinceReset = currentUsed / elapsedSinceResetHours;
+            double sustainableRateSinceReset = remaining / remainingHours;
+            return sustainableRateSinceReset <= 0 ? null : (burnRateSinceReset, burnRateSinceReset / sustainableRateSinceReset);
+        }
 
         double burnRate = usedDelta / elapsedHours;
         double sustainableRate = remaining / remainingHours;

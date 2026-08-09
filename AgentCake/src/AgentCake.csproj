@@ -11,14 +11,12 @@
     <RootNamespace>AgentCake</RootNamespace>
     <!-- High-DPI crispness for the dynamically rendered tray glyph. -->
     <ApplicationHighDpiMode>PerMonitorV2</ApplicationHighDpiMode>
-    <Version>0.1.18</Version>
+    <Version>0.1.23</Version>
     <Product>AgentCake</Product>
     <!-- System.Text.Json ships in the shared framework, so no NuGet restore is needed. -->
   </PropertyGroup>
 
   <ItemGroup>
-    <!-- Pin the borderless panel across virtual desktops when stay-on-top is enabled. -->
-    <PackageReference Include="Slions.VirtualDesktop" Version="6.9.2" />
     <Content Include="assets\\agentcake-profile.png">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </Content>

@@ -7,19 +7,22 @@ public sealed class UsageReader
 {
     private readonly Func<AppSettings> _settings;
     private ServiceUsage? _lastCodexUsage;
+    private ServiceUsage? _lastCodexSparkUsage;
 
     public UsageReader(Func<AppSettings> settings) => _settings = settings;
 
     public UsageSnapshot Scan()
     {
         var cfg = _settings();
-        return new UsageSnapshot(ReadCodex(cfg.ResolveCodexSessionsDir()), ReadClaudeDesktop(cfg.ResolveClaudeDesktopUsagePath(), cfg.ResolveClaudeDesktopLogPath()), DateTime.Now);
+        var codex = ReadCodex(cfg.ResolveCodexSessionsDir());
+        return new UsageSnapshot(codex.OtherModels, codex.Spark, ReadClaudeDesktop(cfg.ResolveClaudeDesktopUsagePath(), cfg.ResolveClaudeDesktopLogPath()), DateTime.Now);
     }
 
-    private ServiceUsage ReadCodex(string sessionsDir)
+    private (ServiceUsage OtherModels, ServiceUsage Spark) ReadCodex(string sessionsDir)
     {
         if (!Directory.Exists(sessionsDir))
-            return _lastCodexUsage ?? ServiceUsage.Unavailable("Codex", "Codex session folder was not found.");
+            return (_lastCodexUsage ?? ServiceUsage.Unavailable("Codex other", "Codex session folder was not found."),
+                _lastCodexSparkUsage ?? ServiceUsage.Unavailable("Codex Spark", "No live Spark allowance record has been written yet."));
 
         try
         {
@@ -47,21 +50,30 @@ public sealed class UsageReader
                 records.AddRange(fileRecords);
             }
 
-            var newest = records.OrderByDescending(record => record.RecordedAt).FirstOrDefault();
-            if (newest is not null)
+            var other = BuildCodexUsage(records.Where(record => string.Equals(record.LimitId, "codex", StringComparison.OrdinalIgnoreCase)));
+            var spark = BuildCodexUsage(records.Where(record => record.LimitId.Contains("spark", StringComparison.OrdinalIgnoreCase)
+                || record.LimitId.Contains("bengalfox", StringComparison.OrdinalIgnoreCase)
+                || record.Usage.Service.Contains("Spark", StringComparison.OrdinalIgnoreCase)));
+            if (other is not null)
             {
-                var pace = UsagePace.Estimate(records.Select(record => new UsageSample(record.RecordedAt, record.Usage.UsedPercent ?? 0, record.Usage.ResetsAt)), newest.Usage);
-                _lastCodexUsage = newest.Usage with
-                {
-                    BurnRatePercentPerHour = pace?.BurnRatePercentPerHour,
-                    BurnPaceRatio = pace?.BurnPaceRatio
-                };
-                return _lastCodexUsage;
+                _lastCodexUsage = other;
+                if (spark is not null) _lastCodexSparkUsage = spark;
+                return (other, spark ?? _lastCodexSparkUsage ?? ServiceUsage.Unavailable("Codex Spark", "No live Spark allowance record has been written yet."));
             }
         }
         catch (Exception exception) { CrashLog.Write("Codex usage scan failed", exception); }
 
-        return _lastCodexUsage ?? ServiceUsage.Unavailable("Codex", "No live weekly account-limit record has been written yet.");
+        return (_lastCodexUsage ?? ServiceUsage.Unavailable("Codex other", "No live weekly account-limit record has been written yet."),
+            _lastCodexSparkUsage ?? ServiceUsage.Unavailable("Codex Spark", "No live Spark allowance record has been written yet."));
+    }
+
+    private static ServiceUsage? BuildCodexUsage(IEnumerable<CodexUsageRecord> source)
+    {
+        var records = source.ToList();
+        var newest = records.OrderByDescending(record => record.RecordedAt).FirstOrDefault();
+        if (newest is null) return null;
+        var pace = UsagePace.Estimate(records.Select(record => new UsageSample(record.RecordedAt, record.Usage.UsedPercent ?? 0, record.Usage.ResetsAt)), newest.Usage);
+        return newest.Usage with { BurnRatePercentPerHour = pace?.BurnRatePercentPerHour, BurnPaceRatio = pace?.BurnPaceRatio };
     }
 
     private static ServiceUsage ReadClaudeDesktop(string historyPath, string logPath)
@@ -135,13 +147,14 @@ public sealed class UsageReader
         {
             if (!line.Contains("\"rate_limits\"", StringComparison.OrdinalIgnoreCase)
                 && !line.Contains("\"rateLimits\"", StringComparison.OrdinalIgnoreCase)) continue;
-            if (!UsageParsers.TryParseCodexWeekly(line, out var usage, out var recordedAt)) continue;
-            yield return new CodexUsageRecord(usage, recordedAt);
+            if (!UsageParsers.TryParseCodexLimits(line, out var usages, out var recordedAt)) continue;
+            foreach (var usage in usages) yield return new CodexUsageRecord(usage.LimitId, usage.Usage, recordedAt);
         }
     }
 }
 
-internal sealed record CodexUsageRecord(ServiceUsage Usage, DateTimeOffset RecordedAt);
+internal sealed record CodexUsageRecord(string LimitId, ServiceUsage Usage, DateTimeOffset RecordedAt);
+internal sealed record CodexLimitUsage(string LimitId, ServiceUsage Usage);
 
 public static class UsageParsers
 {
@@ -150,42 +163,51 @@ public static class UsageParsers
 
     internal static bool TryParseCodexWeekly(string json, out ServiceUsage usage, out DateTimeOffset recordedAt)
     {
-        usage = ServiceUsage.Unavailable("Codex", "No live weekly limit.");
+        if (!TryParseCodexLimits(json, out var usages, out recordedAt))
+        {
+            usage = ServiceUsage.Unavailable("Codex other", "No live Codex limit.");
+            return false;
+        }
+        usage = usages.FirstOrDefault(candidate => string.Equals(candidate.LimitId, "codex", StringComparison.OrdinalIgnoreCase))?.Usage
+            ?? ServiceUsage.Unavailable("Codex other", "No live Codex limit.");
+        return usage.UsedPercent is not null;
+    }
+
+    internal static bool TryParseCodexLimits(string json, out IReadOnlyList<CodexLimitUsage> usages, out DateTimeOffset recordedAt)
+    {
+        usages = Array.Empty<CodexLimitUsage>();
         recordedAt = DateTimeOffset.MinValue;
         try
         {
             using var doc = JsonDocument.Parse(json);
-            var limitSets = FindNamedObjects(doc.RootElement, "rate_limits", "rateLimits", "rate_limit", "rateLimit", "limits").ToList();
-            if (limitSets.Count == 0) return false;
-
-            var candidates = new List<(JsonElement Window, double Minutes, int NameScore)>();
-            foreach (var limits in limitSets)
+            var parsed = new List<CodexLimitUsage>();
+            foreach (var limits in FindNamedObjects(doc.RootElement, "rate_limits", "rateLimits", "rate_limit", "rateLimit", "limits"))
             {
-                // Codex can emit per-model allowances alongside the account-wide
-                // one. The tray's Codex row must never substitute a model quota.
-                if ((!TryString(limits, "limit_id", out var limitId) && !TryString(limits, "limitId", out limitId))
-                    || !string.Equals(limitId, "codex", StringComparison.OrdinalIgnoreCase)) continue;
+                if ((!TryString(limits, "limit_id", out var limitId) && !TryString(limits, "limitId", out limitId)) || string.IsNullOrWhiteSpace(limitId)) continue;
+                var candidates = new List<(JsonElement Window, double Minutes, int NameScore)>();
                 foreach (var property in limits.EnumerateObject())
                 {
                     var window = property.Value;
-                    if (window.ValueKind != JsonValueKind.Object || !TryReadUsedPercent(window, out _)) continue;
-
-                    candidates.Add((window, ReadWindowMinutes(window), WindowNameScore(property.Name)));
+                    if (window.ValueKind == JsonValueKind.Object && TryReadUsedPercent(window, out _))
+                        candidates.Add((window, ReadWindowMinutes(window), WindowNameScore(property.Name)));
                 }
-            }
-            if (candidates.Count == 0) return false;
+                if (candidates.Count == 0) continue;
 
-            // Codex identifies these windows differently across plans. A real
-            // duration is authoritative; the name is only a tie-breaker.
-            var weekly = candidates
-                .OrderByDescending(candidate => candidate.Minutes)
-                .ThenByDescending(candidate => candidate.NameScore)
-                .First();
-            if (!TryReadUsedPercent(weekly.Window, out var used)) return false;
-            TimeSpan? weeklyWindow = weekly.Minutes > 0 ? TimeSpan.FromMinutes(weekly.Minutes) : null;
-            usage = new ServiceUsage("Codex", used, ReadReset(weekly.Window), "Live Codex account limit", WeeklyWindow: weeklyWindow);
+                var weekly = candidates.OrderByDescending(candidate => candidate.Minutes).ThenByDescending(candidate => candidate.NameScore).First();
+                if (!TryReadUsedPercent(weekly.Window, out var used)) continue;
+                TryString(limits, "limit_name", out var limitName);
+                if (string.IsNullOrWhiteSpace(limitName)) TryString(limits, "limitName", out limitName);
+                string service = string.Equals(limitId, "codex", StringComparison.OrdinalIgnoreCase)
+                    ? "Codex other"
+                    : limitName?.Contains("Spark", StringComparison.OrdinalIgnoreCase) == true || limitId.Contains("spark", StringComparison.OrdinalIgnoreCase) || limitId.Contains("bengalfox", StringComparison.OrdinalIgnoreCase)
+                        ? "Codex Spark"
+                        : $"Codex {limitName ?? limitId}";
+                TimeSpan? weeklyWindow = weekly.Minutes > 0 ? TimeSpan.FromMinutes(weekly.Minutes) : null;
+                parsed.Add(new CodexLimitUsage(limitId, new ServiceUsage(service, used, ReadReset(weekly.Window), "Live Codex model allowance", WeeklyWindow: weeklyWindow)));
+            }
+            usages = parsed;
             recordedAt = ReadEventTimestamp(doc.RootElement);
-            return true;
+            return parsed.Count > 0;
         }
         catch { return false; }
     }

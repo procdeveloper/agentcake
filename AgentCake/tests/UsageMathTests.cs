@@ -8,7 +8,7 @@ public class UsageParserTests
     {
         const string json = """{ "payload": { "rate_limits": { "limit_id": "codex", "primary": { "used_percent": 42, "window_minutes": 10080, "resets_at": 1784991002 }, "secondary": { "used_percent": 5, "window_minutes": 300 } } } }""";
         Assert.True(UsageParsers.TryParseCodexWeekly(json, out var usage));
-        Assert.Equal("Codex", usage.Service);
+        Assert.Equal("Codex other", usage.Service);
         Assert.Equal(42, usage.UsedPercent);
         Assert.Equal(58, usage.RemainingPercent);
         Assert.NotNull(usage.ResetsAt);
@@ -51,10 +51,14 @@ public class UsageParserTests
     }
 
     [Fact]
-    public void Codex_ignores_model_specific_allowances()
+    public void Codex_keeps_model_specific_allowances_separate_from_the_shared_counter()
     {
         const string json = """{ "timestamp": "2026-07-25T16:35:06Z", "payload": { "rate_limits": { "limit_id": "codex_bengalfox", "limit_name": "GPT-5.3-Codex-Spark", "primary": { "used_percent": 0, "window_minutes": 10080 } } } }""";
         Assert.False(UsageParsers.TryParseCodexWeekly(json, out _));
+        Assert.True(UsageParsers.TryParseCodexLimits(json, out var limits, out _));
+        var spark = Assert.Single(limits);
+        Assert.Equal("codex_bengalfox", spark.LimitId);
+        Assert.Equal("Codex Spark", spark.Usage.Service);
     }
 
     [Fact]
@@ -114,6 +118,24 @@ public class UsageParserTests
         Assert.NotNull(pace);
         Assert.Equal(10d / 24d, pace!.Value.BurnRatePercentPerHour, 2);
         Assert.Equal((10d / 24d) / (90d / 144d), pace.Value.BurnPaceRatio, 2);
+    }
+
+    [Fact]
+    public void Burn_pace_stays_visible_for_repeated_zero_events_after_a_reset()
+    {
+        DateTime reset = DateTime.Now.AddDays(6);
+        DateTimeOffset now = DateTimeOffset.Now;
+        var current = new ServiceUsage("Codex", 0, reset, "Live", WeeklyWindow: TimeSpan.FromDays(7));
+
+        var pace = UsagePace.Estimate(new[]
+        {
+            new UsageSample(now.AddMinutes(-30), 0, reset),
+            new UsageSample(now, 0, reset)
+        }, current);
+
+        Assert.NotNull(pace);
+        Assert.Equal(0, pace!.Value.BurnRatePercentPerHour);
+        Assert.Equal(0, pace.Value.BurnPaceRatio);
     }
 
     [Fact]
