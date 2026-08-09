@@ -51,15 +51,25 @@ public sealed class UsageReader
             }
 
             var other = BuildCodexUsage(records.Where(record => string.Equals(record.LimitId, "codex", StringComparison.OrdinalIgnoreCase)));
-            var spark = BuildCodexUsage(records.Where(record => record.LimitId.Contains("spark", StringComparison.OrdinalIgnoreCase)
+            var spark = BuildCodexUsage(records.Where(record =>
+                record.LimitId.Contains("spark", StringComparison.OrdinalIgnoreCase)
                 || record.LimitId.Contains("bengalfox", StringComparison.OrdinalIgnoreCase)
                 || record.Usage.Service.Contains("Spark", StringComparison.OrdinalIgnoreCase)));
             if (other is not null)
             {
                 _lastCodexUsage = other;
-                if (spark is not null) _lastCodexSparkUsage = spark;
-                return (other, spark ?? _lastCodexSparkUsage ?? ServiceUsage.Unavailable("Codex Spark", "No live Spark allowance record has been written yet."));
             }
+            if (spark is not null)
+            {
+                _lastCodexSparkUsage = spark;
+            }
+
+            var codex = other ?? _lastCodexUsage
+                ?? ServiceUsage.Unavailable("Codex other", "No live weekly account-limit record has been written yet.");
+            var sparkUsage = spark ?? _lastCodexSparkUsage
+                ?? ServiceUsage.Unavailable("Codex Spark", "No live Spark allowance record has been written yet.");
+
+            return (codex, sparkUsage);
         }
         catch (Exception exception) { CrashLog.Write("Codex usage scan failed", exception); }
 

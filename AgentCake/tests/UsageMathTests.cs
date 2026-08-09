@@ -51,6 +51,30 @@ public class UsageParserTests
     }
 
     [Fact]
+    public void Codex_reader_reports_spark_even_without_a_shared_codex_event()
+    {
+        string sessionsDir = Path.Combine(Path.GetTempPath(), "AgentCake.Tests", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(sessionsDir);
+        try
+        {
+            string json = """{ "timestamp": "2026-08-09T21:10:00Z", "payload": { "rate_limits": { "limit_id": "codex_bengalfox", "limit_name": "GPT-5.3-Codex-Spark", "primary": { "used_percent": 37, "window_minutes": 10080, "resets_at": 1787000000 } } } }""";
+            File.WriteAllText(Path.Combine(sessionsDir, "spark-session.jsonl"), json);
+
+            var reader = new UsageReader(() => new AppSettings { CodexSessionsDir = sessionsDir });
+            var snapshot = reader.Scan();
+
+            Assert.Equal("Codex Spark", snapshot.CodexSpark.Service);
+            Assert.Equal(37, snapshot.CodexSpark.UsedPercent);
+            Assert.Equal("Codex other", snapshot.Codex.Service);
+            Assert.Null(snapshot.Codex.UsedPercent);
+        }
+        finally
+        {
+            Directory.Delete(sessionsDir, recursive: true);
+        }
+    }
+
+    [Fact]
     public void Codex_keeps_model_specific_allowances_separate_from_the_shared_counter()
     {
         const string json = """{ "timestamp": "2026-07-25T16:35:06Z", "payload": { "rate_limits": { "limit_id": "codex_bengalfox", "limit_name": "GPT-5.3-Codex-Spark", "primary": { "used_percent": 0, "window_minutes": 10080 } } } }""";
