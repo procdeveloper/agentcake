@@ -9,7 +9,8 @@ public sealed record ServiceUsage(
     DateTime? FiveHourResetsAt = null,
     TimeSpan? WeeklyWindow = null,
     double? BurnRatePercentPerHour = null,
-    double? BurnPaceRatio = null)
+    double? BurnPaceRatio = null,
+    DateTimeOffset? ObservedAt = null)
 {
     public int? RemainingPercent => UsedPercent is null
         ? null

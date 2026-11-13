@@ -199,11 +199,20 @@ public sealed class DetailsForm : Form
     private static string Format(ServiceUsage usage)
     {
         if (usage.RemainingPercent is not { } remaining) return $"{usage.Service}: unavailable\n{usage.Detail}";
+        // Claude numbers are only as fresh as Claude Desktop's last usage fetch,
+        // so say how old they are instead of implying they are live.
+        string asOf = usage.ObservedAt is { } observed ? $" · as of {FormatAge(observed)}" : "";
         string reset = usage.ResetsAt is { } at ? $" · resets {at:ddd HH:mm}" : "";
         string weekly = $"{(usage.FiveHourUsedPercent is null ? "" : "7d: ")}{usage.UsedPercent:0.#}% used{reset}";
-        if (usage.FiveHourRemainingPercent is not { } fiveHourRemaining) return $"{usage.Service}: {remaining}% remaining\n{weekly}";
+        if (usage.FiveHourRemainingPercent is not { } fiveHourRemaining) return $"{usage.Service}: {remaining}% remaining{asOf}\n{weekly}";
         string fiveHourReset = usage.FiveHourResetsAt is { } fiveHourAt ? $" · resets {fiveHourAt:ddd HH:mm}" : "";
-        return $"{usage.Service}: {remaining}% remaining\n{weekly}\n5h: {fiveHourRemaining}% remaining{fiveHourReset}";
+        return $"{usage.Service}: {remaining}% remaining{asOf}\n{weekly}\n5h: {fiveHourRemaining}% remaining{fiveHourReset}";
+    }
+
+    private static string FormatAge(DateTimeOffset observed)
+    {
+        var local = observed.LocalDateTime;
+        return local.Date == DateTime.Today ? $"{local:HH:mm}" : $"{local:ddd HH:mm}";
     }
 
     private static Label MakeLabel(bool dim = false) => new()

@@ -46,12 +46,13 @@ public sealed class UsageReader
             claude = cached.Usage with
             {
                 Service = "Claude",
-                Detail = $"Claude usage as of {cached.FetchedAt.LocalDateTime:HH:mm}, from Claude Desktop's cached usage response."
+                Detail = $"Claude usage as of {cached.FetchedAt.LocalDateTime:HH:mm}, from Claude Desktop's cached usage response.",
+                ObservedAt = cached.FetchedAt
             };
             claudeSampledAt = cached.FetchedAt;
         }
         if (code is not null && codeSampledAt > claudeSampledAt)
-            claude = code with { Service = "Claude" };
+            claude = code with { Service = "Claude", ObservedAt = codeSampledAt };
 
         if (claude.UsedPercent is not null)
             _lastClaudeUsage = claude;
@@ -205,6 +206,7 @@ public sealed class UsageReader
                     : observedWeeklyReset is not null
                         ? "Live Claude Desktop plan usage; weekly reset was observed in Claude Desktop's own usage history."
                         : "Live Claude Desktop plan usage; reset time is unavailable until Claude writes a live rate-limit response."
+                , ObservedAt = sampledAt == DateTimeOffset.MinValue ? null : sampledAt
             }, sampledAt);
         }
         catch (Exception exception)
