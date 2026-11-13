@@ -31,7 +31,7 @@ Click the tray portrait once to open Details. The Details view has an AgentCake 
 ## What's missing
 
 - Real usage readers for ChatGPT, Gemini, GitHub Copilot, Cursor, OpenRouter, and custom providers. Their switches are placeholders only; AgentCake will never invent a usage value.
-- Direct access to Claude Desktop's server-provided reset timestamp. Its local history stores five-hour and seven-day samples but not reset times, so AgentCake derives the next Claude resets from observed reset transitions.
+- Claude numbers are only as fresh as Claude Desktop's last usage fetch. When its HTTP cache has no usage response, AgentCake falls back to the plan-usage history, which has no reset times, so it derives the next resets from observed reset transitions.
 
 ## Use it
 
@@ -60,8 +60,9 @@ Then run `release\install.bat`. It copies AgentCake into `%LOCALAPPDATA%\AgentCa
 ## Data sources
 
 - **Codex:** live `rate_limits` events in `%USERPROFILE%\.codex\sessions`, including `window_minutes` and reset timestamps.
-- **Claude Desktop:** `plan-usage-history.json`, which records five-hour (`fh`) and seven-day (`sd`) usage samples. AgentCake finds the newest copy in `%LOCALAPPDATA%\Claude-Data\claude_pzs8sxrjxfjjc` (current releases), `%LOCALAPPDATA%\Packages\Claude_pzs8sxrjxfjjc\LocalCache\Roaming\Claude` (older MSIX releases) or `%APPDATA%\Claude`. Claude reset times are derived from the latest observed reset for each window.
-- **Claude Code:** the live `rate_limits` block (five-hour and seven-day, with reset times) from Claude Code's statusline payload, mirrored to `%APPDATA%\AgentCake\claude-status.json` by `%USERPROFILE%\.claude\agentcake-statusline.js`. Claude Desktop and Claude Code share one account allowance, so the Claude and Claude Code rows show whichever source is fresher.
+- **Claude (primary):** the usage responses Claude Desktop has already fetched for its own usage card (`api.anthropic.com/api/oauth/usage` and `claude.ai/api/organizations/{org}/usage`), read from Chromium's on-disk HTTP cache in `Cache\Cache_Data` inside Claude's data folder. These carry exact five-hour and weekly utilization and reset times. AgentCake only reads the cache files; it makes no network request.
+- **Claude Desktop (fallback):** `plan-usage-history.json`, which records five-hour (`fh`) and seven-day (`sd`) usage samples. AgentCake finds the newest copy in `%LOCALAPPDATA%\Claude-Data\claude_pzs8sxrjxfjjc` (current releases), `%LOCALAPPDATA%\Packages\Claude_pzs8sxrjxfjjc\LocalCache\Roaming\Claude` (older MSIX releases) or `%APPDATA%\Claude`. Claude reset times are derived from the latest observed reset for each window.
+- **Claude Code:** the live `rate_limits` block (five-hour and seven-day, with reset times) from Claude Code's statusline payload, mirrored to `%APPDATA%\AgentCake\claude-status.json` by `%USERPROFILE%\.claude\agentcake-statusline.js`. Claude Desktop and Claude Code share one account allowance, so the Claude and Claude Code rows show whichever of these sources is freshest.
 
 Open Claude Desktop while signed in at least once so it writes the plan-usage sample. For fresher numbers while using the Claude Code CLI, set its `statusLine` command to `node "%USERPROFILE%\.claude\agentcake-statusline.js"`.
 

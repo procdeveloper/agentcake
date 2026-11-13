@@ -8,17 +8,19 @@ public sealed class UsageReader
     private readonly Func<AppSettings> _settings;
     private readonly string? _cachePath;
     private readonly string? _claudeCodeStatusPath;
+    private readonly IReadOnlyList<string>? _claudeDataDirs;
     private ServiceUsage? _lastCodexUsage;
     private ServiceUsage? _lastClaudeUsage;
     private string? _loadedSourceKey;
 
     public UsageReader(Func<AppSettings> settings) : this(settings, null) { }
 
-    internal UsageReader(Func<AppSettings> settings, string? cachePath, string? claudeCodeStatusPath = null)
+    internal UsageReader(Func<AppSettings> settings, string? cachePath, string? claudeCodeStatusPath = null, IEnumerable<string>? claudeDataDirs = null)
     {
         _settings = settings;
         _cachePath = cachePath;
         _claudeCodeStatusPath = claudeCodeStatusPath;
+        _claudeDataDirs = claudeDataDirs?.ToList();
     }
 
     public UsageSnapshot Scan()
@@ -33,11 +35,22 @@ public sealed class UsageReader
         var codex = ReadCodex(codexPath);
         var (desktop, desktopSampledAt) = ReadClaudeDesktop(claudeHistoryPath, claudeLogPath);
         var (code, codeSampledAt) = ReadClaudeCodeStatus(_claudeCodeStatusPath ?? AppSettings.ClaudeCodeStatusPath);
+        var cached = ClaudeCacheReader.ReadNewest(_claudeDataDirs ?? AppSettings.ClaudeDesktopDataDirs());
 
-        // Claude Desktop and Claude Code draw from the same account allowance.
-        // Prefer whichever source observed it most recently.
+        // Claude Desktop, its cached usage responses and Claude Code all describe
+        // the same account allowance. Prefer whichever observed it most recently.
         ServiceUsage claude = desktop;
-        if (code is not null && (desktop.UsedPercent is null || codeSampledAt > desktopSampledAt))
+        DateTimeOffset claudeSampledAt = desktop.UsedPercent is null ? DateTimeOffset.MinValue : desktopSampledAt;
+        if (cached is not null && cached.FetchedAt > claudeSampledAt)
+        {
+            claude = cached.Usage with
+            {
+                Service = "Claude",
+                Detail = $"Claude usage as of {cached.FetchedAt.LocalDateTime:HH:mm}, from Claude Desktop's cached usage response."
+            };
+            claudeSampledAt = cached.FetchedAt;
+        }
+        if (code is not null && codeSampledAt > claudeSampledAt)
             claude = code with { Service = "Claude" };
 
         if (claude.UsedPercent is not null)
@@ -354,6 +367,36 @@ public static class UsageParsers
         => IsSecondaryCodexLimit(limitId, limitName)
             ? $"Codex {limitName ?? limitId}"
             : "Codex";
+
+    // Claude's usage endpoints (api.anthropic.com/api/oauth/usage and
+    // claude.ai/api/organizations/{org}/usage) report utilization as 0-100.
+    public static bool TryParseClaudeUsageResponse(byte[] json, out ServiceUsage usage)
+    {
+        usage = ServiceUsage.Unavailable("Claude", "No Claude usage in response.");
+        try
+        {
+            using var doc = JsonDocument.Parse(json);
+            var root = doc.RootElement;
+            if (root.ValueKind != JsonValueKind.Object
+                || !root.TryGetProperty("seven_day", out var weekly) || weekly.ValueKind != JsonValueKind.Object
+                || !TryNumber(weekly, "utilization", out var weeklyUsed) || weeklyUsed is < 0 or > 100)
+                return false;
+
+            double? fiveHourUsed = null;
+            DateTime? fiveHourReset = null;
+            if (root.TryGetProperty("five_hour", out var fiveHour) && fiveHour.ValueKind == JsonValueKind.Object
+                && TryNumber(fiveHour, "utilization", out var parsedFiveHour) && parsedFiveHour is >= 0 and <= 100)
+            {
+                fiveHourUsed = parsedFiveHour;
+                fiveHourReset = ReadReset(fiveHour);
+            }
+
+            usage = new ServiceUsage("Claude", weeklyUsed, ReadReset(weekly), "Claude usage response",
+                fiveHourUsed, fiveHourReset, WeeklyWindow: TimeSpan.FromDays(7));
+            return true;
+        }
+        catch { return false; }
+    }
 
     // Claude Code passes its statusline command a JSON payload whose
     // rate_limits block carries the account's live 5-hour and 7-day usage.

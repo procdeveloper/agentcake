@@ -15,5 +15,6 @@
     <Compile Include="..\src\UsageReader.cs" Link="UsageReader.cs" />
     <Compile Include="..\src\AppSettings.cs" Link="AppSettings.cs" />
     <Compile Include="..\src\CrashLog.cs" Link="CrashLog.cs" />
+    <Compile Include="..\src\ClaudeCacheReader.cs" Link="ClaudeCacheReader.cs" />
   </ItemGroup>
 </Project>

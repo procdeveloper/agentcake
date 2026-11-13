@@ -227,14 +227,14 @@ public class UsageParserTests
                 ClaudeDesktopLogPath = Path.Combine(root, "logs", "none.log")
             };
 
-            var fresh = new UsageReader(() => settings, null, statusPath).Scan();
+            var fresh = new UsageReader(() => settings, null, statusPath, Array.Empty<string>()).Scan();
             Assert.Equal(30, fresh.Claude.UsedPercent);
             Assert.Equal("Claude", fresh.Claude.Service);
             Assert.Equal(30, fresh.ClaudeCode.UsedPercent);
             Assert.Equal("Claude Code", fresh.ClaudeCode.Service);
 
             File.SetLastWriteTimeUtc(statusPath, DateTime.UtcNow.AddDays(-1));
-            var stale = new UsageReader(() => settings, null, statusPath).Scan();
+            var stale = new UsageReader(() => settings, null, statusPath, Array.Empty<string>()).Scan();
             Assert.Equal(10, stale.Claude.UsedPercent);
             Assert.Equal(10, stale.ClaudeCode.UsedPercent);
         }
@@ -380,7 +380,7 @@ public class UsageParserTests
             File.WriteAllText(path, history);
             var settings = new AppSettings { ClaudeDesktopUsagePath = path, ClaudeDesktopLogPath = "\0" };
 
-            var usage = new UsageReader(() => settings).Scan().Claude;
+            var usage = new UsageReader(() => settings, null, Path.Combine(Path.GetTempPath(), "AgentCake.Tests", "no-status.json"), Array.Empty<string>()).Scan().Claude;
 
             Assert.Equal(49, usage.UsedPercent);
             Assert.Equal(100, usage.FiveHourUsedPercent);
@@ -475,5 +475,50 @@ public class UsageParserTests
         Assert.NotNull(resets);
         Assert.Equal(DateTimeOffset.FromUnixTimeSeconds(1786500000).LocalDateTime, resets!.FiveHourResetsAt);
         Assert.Null(resets.WeeklyResetsAt);
+    }
+
+    // Trimmed copy of a real api.anthropic.com/api/oauth/usage response.
+    private const string RealUsageResponse = """{"five_hour":{"utilization":4.0,"resets_at":"2026-11-13T09:50:00.503026+00:00","limit_dollars":null},"seven_day":{"utilization":7.0,"resets_at":"2026-11-19T19:00:00.503046+00:00","limit_dollars":null},"seven_day_opus":null,"limits":[{"kind":"session","percent":4},{"kind":"weekly_all","percent":7}]}""";
+
+    [Fact]
+    public void Claude_usage_response_reports_five_hour_and_weekly_utilization_with_resets()
+    {
+        Assert.True(UsageParsers.TryParseClaudeUsageResponse(System.Text.Encoding.UTF8.GetBytes(RealUsageResponse), out var usage));
+        Assert.Equal(7, usage.UsedPercent);
+        Assert.Equal(93, usage.RemainingPercent);
+        Assert.Equal(4, usage.FiveHourUsedPercent);
+        Assert.Equal(DateTimeOffset.Parse("2026-11-19T19:00:00.503046+00:00").LocalDateTime, usage.ResetsAt);
+        Assert.Equal(DateTimeOffset.Parse("2026-11-13T09:50:00.503026+00:00").LocalDateTime, usage.FiveHourResetsAt);
+    }
+
+    [Fact]
+    public void Claude_usage_response_with_null_five_hour_reset_is_still_read()
+    {
+        const string json = """{"five_hour":{"utilization":0.0,"resets_at":null},"seven_day":{"utilization":6.0,"resets_at":"2026-11-19T18:59:59.932205+00:00"}}""";
+        Assert.True(UsageParsers.TryParseClaudeUsageResponse(System.Text.Encoding.UTF8.GetBytes(json), out var usage));
+        Assert.Equal(6, usage.UsedPercent);
+        Assert.Equal(0, usage.FiveHourUsedPercent);
+        Assert.Null(usage.FiveHourResetsAt);
+    }
+
+    [Fact]
+    public void Cached_brotli_usage_response_is_decoded_with_its_fetch_time()
+    {
+        using var compressed = new MemoryStream();
+        using (var brotli = new System.IO.Compression.BrotliStream(compressed, System.IO.Compression.CompressionLevel.Optimal, leaveOpen: true))
+            brotli.Write(System.Text.Encoding.UTF8.GetBytes(RealUsageResponse));
+        string headers = "HTTP/1.1 200\0date:Fri, 13 Nov 2026 05:01:47 GMT\0content-type:application/json\0content-encoding:br\0\0";
+
+        Assert.True(ClaudeCacheReader.TryParseCachedResponse(headers, compressed.ToArray(), out var usage, out var fetchedAt));
+        Assert.Equal(new DateTimeOffset(2026, 11, 13, 5, 1, 47, TimeSpan.Zero), fetchedAt);
+        Assert.Equal(7, usage.UsedPercent);
+        Assert.Equal(4, usage.FiveHourUsedPercent);
+    }
+
+    [Fact]
+    public void Cached_response_with_unsupported_encoding_is_skipped()
+    {
+        string headers = "date:Fri, 13 Nov 2026 04:53:30 GMT\0content-encoding:zstd\0";
+        Assert.False(ClaudeCacheReader.TryParseCachedResponse(headers, new byte[] { 0x28, 0xb5, 0x2f, 0xfd }, out _, out _));
     }
 }
