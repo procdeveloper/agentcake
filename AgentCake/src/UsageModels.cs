@@ -22,23 +22,30 @@ public sealed record ServiceUsage(
     public static ServiceUsage Unavailable(string service, string detail) => new(service, null, null, detail);
 }
 
-public sealed record UsageSnapshot(ServiceUsage Codex, ServiceUsage CodexSpark, ServiceUsage Claude, DateTime GeneratedAt);
+public sealed record UsageSnapshot(ServiceUsage Codex, ServiceUsage Claude, ServiceUsage ClaudeCode, DateTime GeneratedAt);
 
 internal sealed record UsageSample(DateTimeOffset RecordedAt, double UsedPercent, DateTime? ResetsAt);
 
 internal static class UsagePace
 {
+    private static readonly TimeSpan ResetTolerance = TimeSpan.FromSeconds(90);
+
+    private static bool IsSameResetWindow(DateTime? left, DateTime? right)
+        => left == right
+            || (left is not null
+                && right is not null
+                && Math.Abs((left.Value - right.Value).TotalSeconds) <= ResetTolerance.TotalSeconds);
+
     public static (double BurnRatePercentPerHour, double BurnPaceRatio)? Estimate(IEnumerable<UsageSample> samples, ServiceUsage current)
     {
         if (current.UsedPercent is not { } currentUsed || current.ResetsAt is not { } resetsAt) return null;
         double remaining = Math.Max(0, 100 - currentUsed);
-        double remainingHours = (resetsAt - DateTime.Now).TotalHours;
-        if (remaining <= 0 || remainingHours <= 0) return null;
+        double remainingHours = Math.Max((resetsAt - DateTime.Now).TotalHours, 1d / 60d);
 
         var ordered = samples
             .Where(sample => sample.RecordedAt != DateTimeOffset.MinValue
                 && sample.UsedPercent <= currentUsed
-                && sample.ResetsAt == resetsAt)
+                && IsSameResetWindow(sample.ResetsAt, resetsAt))
             .OrderBy(sample => sample.RecordedAt)
             .ToList();
         if (ordered.Count < 2)
@@ -49,11 +56,14 @@ internal static class UsagePace
             // a useful 0.0x/starting value instead of rendering it as unknown.
             if (current.WeeklyWindow is not { } weeklyWindow) return null;
             double elapsedSinceResetHours = (DateTime.Now - (resetsAt - weeklyWindow)).TotalHours;
-            if (elapsedSinceResetHours <= 0) return null;
+            if (elapsedSinceResetHours <= 0) elapsedSinceResetHours = 1d / 60d;
 
             double burnRateSinceReset = currentUsed / elapsedSinceResetHours;
             double sustainableRateSinceReset = remaining / remainingHours;
-            return sustainableRateSinceReset <= 0 ? null : (burnRateSinceReset, burnRateSinceReset / sustainableRateSinceReset);
+            double paceSinceReset = sustainableRateSinceReset <= 0
+                ? 10d
+                : Math.Min(10d, burnRateSinceReset / sustainableRateSinceReset);
+            return (burnRateSinceReset, Math.Max(0d, paceSinceReset));
         }
 
         var newest = ordered[^1];
@@ -73,14 +83,18 @@ internal static class UsagePace
             // of treating that real, quiet state as an unknown rate.
             if (current.WeeklyWindow is not { } weeklyWindow) return null;
             double elapsedSinceResetHours = (DateTime.Now - (resetsAt - weeklyWindow)).TotalHours;
-            if (elapsedSinceResetHours <= 0) return null;
+            if (elapsedSinceResetHours <= 0) elapsedSinceResetHours = 1d / 60d;
             double burnRateSinceReset = currentUsed / elapsedSinceResetHours;
             double sustainableRateSinceReset = remaining / remainingHours;
-            return sustainableRateSinceReset <= 0 ? null : (burnRateSinceReset, burnRateSinceReset / sustainableRateSinceReset);
+            double paceSinceReset = sustainableRateSinceReset <= 0
+                ? 10d
+                : Math.Min(10d, burnRateSinceReset / sustainableRateSinceReset);
+            return (burnRateSinceReset, Math.Max(0d, paceSinceReset));
         }
 
         double burnRate = usedDelta / elapsedHours;
         double sustainableRate = remaining / remainingHours;
-        return sustainableRate <= 0 ? null : (burnRate, burnRate / sustainableRate);
+        if (sustainableRate <= 0) return (burnRate, 10d);
+        return (burnRate, Math.Min(10d, Math.Max(0d, burnRate / sustainableRate)));
     }
 }

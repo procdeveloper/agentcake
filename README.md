@@ -23,14 +23,14 @@ Click the tray portrait once to open Details. The Details view has an AgentCake 
 - Details window beside the tray, with centered service icons, a refresh control, and a prominent mascot header.
 - Usage charts with a weekly inner pie, Claude five-hour allowance rim, and blue weekly time-to-reset rim.
 - One-click launch for Codex and Claude Desktop.
-- Optional Claude Code row that opens Command Prompt and runs `claude`.
+- Optional Claude Code row showing the shared Claude account usage; click it to open Command Prompt and run `claude`.
 - Provider visibility switches saved in `%APPDATA%\AgentCake\settings.json`.
 - Current-user **Run at login** option.
 - Self-contained Windows x64 release builder and one-click current-user installer.
 
 ## What's missing
 
-- Real usage readers for Claude Code, ChatGPT, Gemini, GitHub Copilot, Cursor, OpenRouter, and custom providers. Their switches are placeholders only; AgentCake will never invent a usage value.
+- Real usage readers for ChatGPT, Gemini, GitHub Copilot, Cursor, OpenRouter, and custom providers. Their switches are placeholders only; AgentCake will never invent a usage value.
 - Direct access to Claude Desktop's server-provided reset timestamp. Its local history stores five-hour and seven-day samples but not reset times, so AgentCake derives the next Claude resets from observed reset transitions.
 
 ## Use it
@@ -60,9 +60,10 @@ Then run `release\install.bat`. It copies AgentCake into `%LOCALAPPDATA%\AgentCa
 ## Data sources
 
 - **Codex:** live `rate_limits` events in `%USERPROFILE%\.codex\sessions`, including `window_minutes` and reset timestamps.
-- **Claude Desktop:** `%LOCALAPPDATA%\Packages\Claude_pzs8sxrjxfjjc\LocalCache\Roaming\Claude\plan-usage-history.json`, which records five-hour (`fh`) and seven-day (`sd`) usage samples. Claude reset times are derived from the latest observed reset for each window.
+- **Claude Desktop:** `plan-usage-history.json`, which records five-hour (`fh`) and seven-day (`sd`) usage samples. AgentCake finds the newest copy in `%LOCALAPPDATA%\Claude-Data\claude_pzs8sxrjxfjjc` (current releases), `%LOCALAPPDATA%\Packages\Claude_pzs8sxrjxfjjc\LocalCache\Roaming\Claude` (older MSIX releases) or `%APPDATA%\Claude`. Claude reset times are derived from the latest observed reset for each window.
+- **Claude Code:** the live `rate_limits` block (five-hour and seven-day, with reset times) from Claude Code's statusline payload, mirrored to `%APPDATA%\AgentCake\claude-status.json` by `%USERPROFILE%\.claude\agentcake-statusline.js`. Claude Desktop and Claude Code share one account allowance, so the Claude and Claude Code rows show whichever source is fresher.
 
-Open Claude Desktop while signed in at least once so it writes the plan-usage sample.
+Open Claude Desktop while signed in at least once so it writes the plan-usage sample. For fresher numbers while using the Claude Code CLI, set its `statusLine` command to `node "%USERPROFILE%\.claude\agentcake-statusline.js"`.
 
 ## Provider settings
 
@@ -85,7 +86,7 @@ The tray menu writes `%APPDATA%\AgentCake\settings.json`. The relevant section l
 }
 ```
 
-Turning off Codex or Claude Desktop removes it from Details and from tray-bar mode. Claude Code can be shown as a launcher row; the remaining entries are saved placeholders for future data readers.
+Turning off Codex or Claude Desktop removes it from Details and from tray-bar mode. Claude Code can be shown as its own row; the remaining entries are saved placeholders for future data readers.
 
 ## License
 

@@ -1,4 +1,5 @@
 using AgentCake;
+using System.Text.Json;
 using Xunit;
 
 public class UsageParserTests
@@ -8,7 +9,7 @@ public class UsageParserTests
     {
         const string json = """{ "payload": { "rate_limits": { "limit_id": "codex", "primary": { "used_percent": 42, "window_minutes": 10080, "resets_at": 1784991002 }, "secondary": { "used_percent": 5, "window_minutes": 300 } } } }""";
         Assert.True(UsageParsers.TryParseCodexWeekly(json, out var usage));
-        Assert.Equal("Codex other", usage.Service);
+        Assert.Equal("Codex", usage.Service);
         Assert.Equal(42, usage.UsedPercent);
         Assert.Equal(58, usage.RemainingPercent);
         Assert.NotNull(usage.ResetsAt);
@@ -51,22 +52,124 @@ public class UsageParserTests
     }
 
     [Fact]
-    public void Codex_reader_reports_spark_even_without_a_shared_codex_event()
+    public void Codex_reader_ignores_spark_side_allowance()
     {
         string sessionsDir = Path.Combine(Path.GetTempPath(), "AgentCake.Tests", Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(sessionsDir);
         try
         {
-            string json = """{ "timestamp": "2026-08-09T21:10:00Z", "payload": { "rate_limits": { "limit_id": "codex_bengalfox", "limit_name": "GPT-5.3-Codex-Spark", "primary": { "used_percent": 37, "window_minutes": 10080, "resets_at": 1787000000 } } } }""";
-            File.WriteAllText(Path.Combine(sessionsDir, "spark-session.jsonl"), json);
+            string json = string.Join(Environment.NewLine,
+                """{ "timestamp": "2026-08-09T21:09:00Z", "payload": { "rate_limits": { "limit_id": "codex", "primary": { "used_percent": 15, "window_minutes": 10080, "resets_at": 1787000000 } } } }""",
+                """{ "timestamp": "2026-08-09T21:10:00Z", "payload": { "rate_limits": { "limit_id": "codex_bengalfox", "limit_name": "GPT-5.3-Codex-Spark", "primary": { "used_percent": 37, "window_minutes": 10080, "resets_at": 1787000000 } } } }""");
+            File.WriteAllText(Path.Combine(sessionsDir, "mixed.jsonl"), json);
 
-            var reader = new UsageReader(() => new AppSettings { CodexSessionsDir = sessionsDir });
-            var snapshot = reader.Scan();
+            var snapshot = new UsageReader(() => new AppSettings { CodexSessionsDir = sessionsDir }).Scan();
 
-            Assert.Equal("Codex Spark", snapshot.CodexSpark.Service);
-            Assert.Equal(37, snapshot.CodexSpark.UsedPercent);
-            Assert.Equal("Codex other", snapshot.Codex.Service);
-            Assert.Null(snapshot.Codex.UsedPercent);
+            Assert.Equal("Codex", snapshot.Codex.Service);
+            Assert.Equal(15, snapshot.Codex.UsedPercent);
+        }
+        finally
+        {
+            Directory.Delete(sessionsDir, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void Codex_reader_finds_limits_in_archived_sessions()
+    {
+        string codexDir = Path.Combine(Path.GetTempPath(), "AgentCake.Tests", Guid.NewGuid().ToString("N"));
+        string sessionsDir = Path.Combine(codexDir, "sessions");
+        string archivedDir = Path.Combine(codexDir, "archived_sessions");
+        Directory.CreateDirectory(sessionsDir);
+        Directory.CreateDirectory(archivedDir);
+        try
+        {
+            File.WriteAllText(Path.Combine(archivedDir, "old.jsonl"),
+                """{ "timestamp": "2026-08-13T00:00:00Z", "payload": { "rate_limits": { "limit_id": "codex", "primary": { "used_percent": 34, "window_minutes": 10080, "resets_at": 1787012129 } } } }""");
+
+            var snapshot = new UsageReader(() => new AppSettings { CodexSessionsDir = sessionsDir }).Scan();
+
+            Assert.Equal(34, snapshot.Codex.UsedPercent);
+        }
+        finally
+        {
+            Directory.Delete(codexDir, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void Reader_restores_last_good_provider_values_after_restart()
+    {
+        string root = Path.Combine(Path.GetTempPath(), "AgentCake.Tests", Guid.NewGuid().ToString("N"));
+        string sessionsDir = Path.Combine(root, "sessions");
+        string cachePath = Path.Combine(root, "last-good.json");
+        Directory.CreateDirectory(sessionsDir);
+        try
+        {
+            string sessionPath = Path.Combine(sessionsDir, "codex.jsonl");
+            File.WriteAllText(sessionPath,
+                """{ "timestamp": "2026-08-13T00:00:00Z", "payload": { "rate_limits": { "limit_id": "codex", "primary": { "used_percent": 34, "window_minutes": 10080, "resets_at": 1787012129 } } } }""");
+
+            var settings = new AppSettings { CodexSessionsDir = sessionsDir };
+            var first = new UsageReader(() => settings, cachePath).Scan();
+            File.Delete(sessionPath);
+            var afterRestart = new UsageReader(() => settings, cachePath).Scan();
+
+            Assert.Equal(34, first.Codex.UsedPercent);
+            Assert.Equal(first.Codex.UsedPercent, afterRestart.Codex.UsedPercent);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void Codex_reader_treats_any_non_spark_limit_as_the_shared_counter()
+    {
+        string sessionsDir = Path.Combine(Path.GetTempPath(), "AgentCake.Tests", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(sessionsDir);
+        try
+        {
+            var now = DateTimeOffset.UtcNow;
+            var resetsAt = now.AddDays(5).ToUnixTimeSeconds();
+            string BuildLine(string limitId, double used, DateTimeOffset timestamp)
+            {
+                var payload = new Dictionary<string, object?>
+                {
+                    ["timestamp"] = timestamp.UtcDateTime.ToString("yyyy-MM-ddTHH:mm:ssZ"),
+                    ["type"] = "event_msg",
+                    ["payload"] = new Dictionary<string, object?>
+                    {
+                        ["type"] = "token_count",
+                        ["rate_limits"] = new Dictionary<string, object?>
+                        {
+                            ["limit_id"] = limitId,
+                            ["primary"] = new Dictionary<string, object?>
+                            {
+                                ["used_percent"] = used,
+                                ["window_minutes"] = 10080,
+                                ["resets_at"] = resetsAt
+                            }
+                        }
+                    }
+                };
+                return JsonSerializer.Serialize(payload);
+            }
+
+            string mix = string.Concat(
+                BuildLine("codex_other_model", 10, now.AddMinutes(-30)),
+                Environment.NewLine,
+                BuildLine("codex_bengalfox", 22, now),
+                Environment.NewLine,
+                BuildLine("codex_other_model", 12, now.AddMinutes(1)));
+            File.WriteAllText(Path.Combine(sessionsDir, "mixed-session.jsonl"), mix);
+
+            var snapshot = new UsageReader(() => new AppSettings { CodexSessionsDir = sessionsDir }).Scan();
+
+            Assert.Equal("Codex", snapshot.Codex.Service);
+            Assert.Equal(12, snapshot.Codex.UsedPercent);
+            Assert.NotNull(snapshot.Codex.BurnPaceRatio);
         }
         finally
         {
@@ -82,7 +185,63 @@ public class UsageParserTests
         Assert.True(UsageParsers.TryParseCodexLimits(json, out var limits, out _));
         var spark = Assert.Single(limits);
         Assert.Equal("codex_bengalfox", spark.LimitId);
-        Assert.Equal("Codex Spark", spark.Usage.Service);
+    }
+
+    [Fact]
+    public void Claude_Code_status_payload_provides_live_weekly_and_five_hour_usage()
+    {
+        long weeklyReset = DateTimeOffset.UtcNow.AddDays(3).ToUnixTimeSeconds();
+        long fiveHourReset = DateTimeOffset.UtcNow.AddHours(2).ToUnixTimeSeconds();
+        string json = $$"""{ "model": { "id": "claude-opus-5-5" }, "rate_limits": { "five_hour": { "used_percentage": 23.5, "resets_at": {{fiveHourReset}} }, "seven_day": { "used_percentage": 41.2, "resets_at": {{weeklyReset}} } } }""";
+
+        Assert.True(UsageParsers.TryParseClaudeCodeStatus(json, out var usage));
+        Assert.Equal(41.2, usage.UsedPercent);
+        Assert.Equal(23.5, usage.FiveHourUsedPercent);
+        Assert.Equal(DateTimeOffset.FromUnixTimeSeconds(weeklyReset).LocalDateTime, usage.ResetsAt);
+        Assert.Equal(DateTimeOffset.FromUnixTimeSeconds(fiveHourReset).LocalDateTime, usage.FiveHourResetsAt);
+    }
+
+    [Fact]
+    public void Claude_Code_status_payload_without_rate_limits_is_ignored()
+    {
+        Assert.False(UsageParsers.TryParseClaudeCodeStatus("""{ "model": { "id": "x" } }""", out _));
+        Assert.False(UsageParsers.TryParseClaudeCodeStatus("", out _));
+    }
+
+    [Fact]
+    public void Reader_prefers_the_fresher_of_Claude_Desktop_history_and_Claude_Code_status()
+    {
+        string root = Path.Combine(Path.GetTempPath(), "AgentCake.Tests", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        try
+        {
+            string historyPath = Path.Combine(root, "plan-usage-history.json");
+            string statusPath = Path.Combine(root, "claude-status.json");
+            long oldSample = DateTimeOffset.UtcNow.AddHours(-6).ToUnixTimeMilliseconds();
+            File.WriteAllText(historyPath, $$"""{ "version": 1, "samples": [ { "t": {{oldSample}}, "u": { "fh": 0, "sd": 10 } } ] }""");
+            File.WriteAllText(statusPath, """{ "rate_limits": { "five_hour": { "used_percentage": 5 }, "seven_day": { "used_percentage": 30 } } }""");
+            var settings = new AppSettings
+            {
+                CodexSessionsDir = Path.Combine(root, "none"),
+                ClaudeDesktopUsagePath = historyPath,
+                ClaudeDesktopLogPath = Path.Combine(root, "logs", "none.log")
+            };
+
+            var fresh = new UsageReader(() => settings, null, statusPath).Scan();
+            Assert.Equal(30, fresh.Claude.UsedPercent);
+            Assert.Equal("Claude", fresh.Claude.Service);
+            Assert.Equal(30, fresh.ClaudeCode.UsedPercent);
+            Assert.Equal("Claude Code", fresh.ClaudeCode.Service);
+
+            File.SetLastWriteTimeUtc(statusPath, DateTime.UtcNow.AddDays(-1));
+            var stale = new UsageReader(() => settings, null, statusPath).Scan();
+            Assert.Equal(10, stale.Claude.UsedPercent);
+            Assert.Equal(10, stale.ClaudeCode.UsedPercent);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
     }
 
     [Fact]
@@ -145,6 +304,25 @@ public class UsageParserTests
     }
 
     [Fact]
+    public void Burn_pace_tolerates_reset_timestamp_jitter_from_same_week()
+    {
+        DateTime reset = DateTime.Now.AddHours(50);
+        DateTimeOffset now = DateTimeOffset.Now;
+        var current = new ServiceUsage("Codex", 50, reset, "Live", WeeklyWindow: TimeSpan.FromDays(7));
+        var samples = new[]
+        {
+            new UsageSample(now.AddHours(-2), 47, reset.AddSeconds(-58)),
+            new UsageSample(now, 50, reset.AddSeconds(35))
+        };
+
+        var pace = UsagePace.Estimate(samples, current);
+
+        Assert.NotNull(pace);
+        Assert.Equal(1.5, pace!.Value.BurnRatePercentPerHour, 3);
+        Assert.Equal(1.5, pace.Value.BurnPaceRatio, 3);
+    }
+
+    [Fact]
     public void Burn_pace_stays_visible_for_repeated_zero_events_after_a_reset()
     {
         DateTime reset = DateTime.Now.AddDays(6);
@@ -163,6 +341,24 @@ public class UsageParserTests
     }
 
     [Fact]
+    public void Burn_pace_stays_visible_when_allowance_is_exhausted()
+    {
+        DateTime reset = DateTime.Now.AddHours(8);
+        DateTimeOffset now = DateTimeOffset.Now;
+        var current = new ServiceUsage("Codex", 100, reset, "Live", WeeklyWindow: TimeSpan.FromDays(7));
+
+        var pace = UsagePace.Estimate(new[]
+        {
+            new UsageSample(now.AddHours(-8), 93, reset),
+            new UsageSample(now, 100, reset)
+        }, current);
+
+        Assert.NotNull(pace);
+        Assert.Equal(0.875d, pace!.Value.BurnRatePercentPerHour, 3);
+        Assert.InRange(pace!.Value.BurnPaceRatio, 9.5d, 10d);
+    }
+
+    [Fact]
     public void Claude_Desktop_uses_the_latest_seven_day_sample()
     {
         const string json = """{ "version": 2, "samples": [{ "t": 1784447000000, "u": { "fh": 11, "sd": 83 } }, { "t": 1784447300000, "u": { "fh": 15, "sd": 84 } }] }""";
@@ -171,6 +367,28 @@ public class UsageParserTests
         Assert.Equal(84, usage.UsedPercent);
         Assert.Equal(16, usage.RemainingPercent);
         Assert.Null(usage.ResetsAt);
+    }
+
+    [Fact]
+    public void Claude_usage_survives_an_unreadable_optional_reset_log()
+    {
+        string history = """{ "version": 2, "samples": [{ "t": 1786581940209, "u": { "fh": 100, "sd": 49 } }] }""";
+        string path = Path.Combine(Path.GetTempPath(), "AgentCake.Tests", Guid.NewGuid().ToString("N"), "plan-usage-history.json");
+        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+        try
+        {
+            File.WriteAllText(path, history);
+            var settings = new AppSettings { ClaudeDesktopUsagePath = path, ClaudeDesktopLogPath = "\0" };
+
+            var usage = new UsageReader(() => settings).Scan().Claude;
+
+            Assert.Equal(49, usage.UsedPercent);
+            Assert.Equal(100, usage.FiveHourUsedPercent);
+        }
+        finally
+        {
+            Directory.Delete(Path.GetDirectoryName(path)!, recursive: true);
+        }
     }
 
     [Fact]
@@ -222,5 +440,40 @@ public class UsageParserTests
         Assert.NotNull(resets);
         Assert.Equal(DateTimeOffset.FromUnixTimeSeconds(1785069600).LocalDateTime, resets!.FiveHourResetsAt);
         Assert.Equal(DateTimeOffset.FromUnixTimeSeconds(1785438000).LocalDateTime, resets.WeeklyResetsAt);
+    }
+
+    [Fact]
+    public void Claude_Desktop_reset_log_skips_non_json_fragments_inside_nested_text()
+    {
+        const string line = "2026-07-26 12:22:59 [error] {\"name\":\"Error\",\"stack\":\"at {foo} {\\\"windows\\\":{\\\"7d\\\":{\\\"resets_at\\\":1785438000}}}\"}";
+
+        var resets = UsageParsers.ReadClaudeDesktopLiveResets(new[] { line });
+
+        Assert.NotNull(resets);
+        Assert.Equal(DateTimeOffset.FromUnixTimeSeconds(1785438000).LocalDateTime, resets!.WeeklyResetsAt);
+    }
+
+    [Fact]
+    public void Claude_Desktop_reads_top_level_resets_on_five_hour_claim()
+    {
+        const string line = "2026-08-12 08:00:00 [error] API error: {\"type\":\"within_limit\",\"representativeClaim\":\"five_hour\",\"resetsAt\":1786500000}";
+
+        var resets = UsageParsers.ReadClaudeDesktopLiveResets(new[] { line });
+
+        Assert.NotNull(resets);
+        Assert.Equal(DateTimeOffset.FromUnixTimeSeconds(1786500000).LocalDateTime, resets!.FiveHourResetsAt);
+        Assert.Null(resets.WeeklyResetsAt);
+    }
+
+    [Fact]
+    public void Claude_Desktop_reads_resolved_limit_reset_when_windows_are_missing()
+    {
+        const string line = """2026-08-12 08:00:00 [error] API error: {"type":"exceeded_limit","resetsAt":null,"resolved":{"limit":{"resets_at":1786500000}}}""";
+
+        var resets = UsageParsers.ReadClaudeDesktopLiveResets(new[] { line });
+
+        Assert.NotNull(resets);
+        Assert.Equal(DateTimeOffset.FromUnixTimeSeconds(1786500000).LocalDateTime, resets!.FiveHourResetsAt);
+        Assert.Null(resets.WeeklyResetsAt);
     }
 }

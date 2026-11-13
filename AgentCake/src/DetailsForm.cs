@@ -10,19 +10,15 @@ public sealed class DetailsForm : Form
     private const int ContentMargin = 24;
     private const int ContentRight = 616;
     private readonly Label _codex = MakeLabel();
-    private readonly Label _codexSpark = MakeLabel();
     private readonly Label _claude = MakeLabel();
     private readonly Label _footer = MakeLabel(dim: true);
     private readonly PictureBox _codexIcon = MakeServiceIcon(ServiceIcon.Codex);
-    private readonly PictureBox _codexSparkIcon = MakeServiceIcon(ServiceIcon.Codex);
     private readonly PictureBox _claudeIcon = MakeServiceIcon(ServiceIcon.Claude);
     private readonly PictureBox _claudeCodeIcon = MakeServiceIcon(ServiceIcon.ClaudeCode);
     private readonly PictureBox _codexChart = MakeUsageChart();
-    private readonly PictureBox _codexSparkChart = MakeUsageChart();
     private readonly PictureBox _claudeChart = MakeUsageChart();
     private readonly PictureBox _claudeCodeChart = MakeUsageChart();
     private readonly PictureBox _codexPace = MakeUsageChart();
-    private readonly PictureBox _codexSparkPace = MakeUsageChart();
     private readonly PictureBox _claudePace = MakeUsageChart();
     private readonly PictureBox _claudeCodePace = MakeUsageChart();
     private readonly Label _claudeCode = MakeLabel();
@@ -87,10 +83,9 @@ public sealed class DetailsForm : Form
             }
         };
         WireLaunchAction(AgentLauncher.LaunchCodex, "Click to open Codex", _codexIcon, _codex, _codexChart, _codexPace);
-        WireLaunchAction(AgentLauncher.LaunchCodex, "Click to open Codex", _codexSparkIcon, _codexSpark, _codexSparkChart, _codexSparkPace);
         WireLaunchAction(AgentLauncher.LaunchClaudeDesktop, "Click to open Claude Desktop", _claudeIcon, _claude, _claudeChart, _claudePace);
         WireLaunchAction(AgentLauncher.LaunchClaudeCode, "Click to open Command Prompt and run Claude Code", _claudeCodeIcon, _claudeCode, _claudeCodeChart, _claudeCodePace);
-        Controls.AddRange(new Control[] { _agentPortrait, _heading, _subheading, _hideButton, _headerDivider, _sourceDivider, _sourceDivider2, _sourceDivider3, _footerDivider, _codexIcon, _codexSparkIcon, _claudeIcon, _claudeCodeIcon, _codexChart, _codexSparkChart, _claudeChart, _claudeCodeChart, _codexPace, _codexSparkPace, _claudePace, _claudeCodePace, _codex, _codexSpark, _claude, _claudeCode, _footer, _refreshButton });
+        Controls.AddRange(new Control[] { _agentPortrait, _heading, _subheading, _hideButton, _headerDivider, _sourceDivider, _sourceDivider2, _sourceDivider3, _footerDivider, _codexIcon, _claudeIcon, _claudeCodeIcon, _codexChart, _claudeChart, _claudeCodeChart, _codexPace, _claudePace, _claudeCodePace, _codex, _claude, _claudeCode, _footer, _refreshButton });
         WireWindowDragAnywhere();
     }
 
@@ -179,13 +174,8 @@ public sealed class DetailsForm : Form
         int dividerIndex = 0;
         bool hasPrevious = false;
         AddRow(providers.Codex, _codexIcon, _codexChart, _codexPace, _codex, snapshot.Codex, ref nextRowY, ref hasPrevious, ref dividerIndex, DividerGap);
-        // An enabled source must remain visible even before its first event in
-        // this process. Hiding Spark made it look as though its provider switch
-        // had been ignored after an AgentCake restart.
-        AddRow(providers.CodexSpark, _codexSparkIcon, _codexSparkChart, _codexSparkPace, _codexSpark, snapshot.CodexSpark, ref nextRowY, ref hasPrevious, ref dividerIndex, DividerGap);
         AddRow(providers.ClaudeDesktop, _claudeIcon, _claudeChart, _claudePace, _claude, snapshot.Claude, ref nextRowY, ref hasPrevious, ref dividerIndex, DividerGap);
-        var claudeCode = ServiceUsage.Unavailable("Claude Code", "Launcher ready; live usage reader is not connected yet.");
-        AddRow(providers.ClaudeCode, _claudeCodeIcon, _claudeCodeChart, _claudeCodePace, _claudeCode, claudeCode, ref nextRowY, ref hasPrevious, ref dividerIndex, DividerGap);
+        AddRow(providers.ClaudeCode, _claudeCodeIcon, _claudeCodeChart, _claudeCodePace, _claudeCode, snapshot.ClaudeCode, ref nextRowY, ref hasPrevious, ref dividerIndex, DividerGap);
         _sourceDivider.Visible = dividerIndex > 0;
         _sourceDivider2.Visible = dividerIndex > 1;
         _sourceDivider3.Visible = dividerIndex > 2;
@@ -310,7 +300,6 @@ public sealed class DetailsForm : Form
 
     private static int CountEnabledPlaceholders(ProviderSettings providers) => new[]
     {
-        providers.ClaudeCode,
         providers.ChatGpt,
         providers.Gemini,
         providers.GitHubCopilot,

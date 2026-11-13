@@ -22,7 +22,7 @@ public sealed class TrayAppContext : ApplicationContext
 
     public TrayAppContext()
     {
-        _reader = new UsageReader(() => _settings);
+        _reader = new UsageReader(() => _settings, AppSettings.UsageCachePath);
         _ = _marshal.Handle;
         _tray = new NotifyIcon { Icon = _portraitIcon, Visible = true, Text = "AgentCake: loading live limits" };
         _tray.MouseClick += (_, eventArgs) =>
@@ -150,6 +150,7 @@ public sealed class TrayAppContext : ApplicationContext
         var enabled = new List<ServiceUsage>();
         if (_settings.Providers.Codex) enabled.Add(snapshot.Codex);
         if (_settings.Providers.ClaudeDesktop) enabled.Add(snapshot.Claude);
+        else if (_settings.Providers.ClaudeCode) enabled.Add(snapshot.ClaudeCode);
         return enabled;
     }
 
@@ -157,10 +158,9 @@ public sealed class TrayAppContext : ApplicationContext
     {
         var menu = new ToolStripMenuItem("Providers");
         AddProvider(menu, "Codex", () => _settings.Providers.Codex, value => _settings.Providers.Codex = value);
-        AddProvider(menu, "Codex Spark", () => _settings.Providers.CodexSpark, value => _settings.Providers.CodexSpark = value);
         AddProvider(menu, "Claude Desktop", () => _settings.Providers.ClaudeDesktop, value => _settings.Providers.ClaudeDesktop = value);
+        AddProvider(menu, "Claude Code", () => _settings.Providers.ClaudeCode, value => _settings.Providers.ClaudeCode = value);
         menu.DropDownItems.Add(new ToolStripSeparator());
-        AddProvider(menu, "Claude Code (placeholder)", () => _settings.Providers.ClaudeCode, value => _settings.Providers.ClaudeCode = value);
         AddProvider(menu, "ChatGPT (placeholder)", () => _settings.Providers.ChatGpt, value => _settings.Providers.ChatGpt = value);
         AddProvider(menu, "Gemini (placeholder)", () => _settings.Providers.Gemini, value => _settings.Providers.Gemini = value);
         AddProvider(menu, "GitHub Copilot (placeholder)", () => _settings.Providers.GitHubCopilot, value => _settings.Providers.GitHubCopilot = value);
@@ -219,3 +219,4 @@ public sealed class TrayAppContext : ApplicationContext
         base.Dispose(disposing);
     }
 }
+
