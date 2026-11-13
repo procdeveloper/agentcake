@@ -11,6 +11,7 @@ public sealed class UsageReader
     private readonly IReadOnlyList<string>? _claudeDataDirs;
     private ServiceUsage? _lastCodexUsage;
     private ServiceUsage? _lastClaudeUsage;
+    private readonly List<(DateTimeOffset At, double Used)> _claudeReadings = new();
     private string? _loadedSourceKey;
 
     public UsageReader(Func<AppSettings> settings) : this(settings, null) { }
@@ -52,7 +53,23 @@ public sealed class UsageReader
             claudeSampledAt = cached.FetchedAt;
         }
         if (code is not null && codeSampledAt > claudeSampledAt)
+        {
             claude = code with { Service = "Claude", ObservedAt = codeSampledAt };
+            claudeSampledAt = codeSampledAt;
+        }
+
+        if (claude.BurnPaceRatio is null && claude.UsedPercent is { } claudeUsed && claudeSampledAt != DateTimeOffset.MinValue)
+        {
+            if (!_claudeReadings.Any(r => r.At == claudeSampledAt))
+            {
+                _claudeReadings.Add((claudeSampledAt, claudeUsed));
+                _claudeReadings.RemoveAll(r => r.At < claudeSampledAt.AddDays(-8));
+            }
+            var history = File.Exists(claudeHistoryPath)
+                ? UsageParsers.ReadClaudeDesktopWeeklySamples(SafeReadSharedText(claudeHistoryPath))
+                : new List<(DateTimeOffset At, double Used)>();
+            claude = UsageParsers.WithClaudePace(claude, claudeSampledAt, history.Concat(_claudeReadings));
+        }
 
         if (claude.UsedPercent is not null)
             _lastClaudeUsage = claude;
@@ -305,6 +322,12 @@ public sealed class UsageReader
         return reader.ReadToEnd();
     }
 
+    private static string SafeReadSharedText(string path)
+    {
+        try { return ReadSharedText(path); }
+        catch { return ""; }
+    }
+
     private void EnsureCacheLoaded(string sourceKey)
     {
         if (_loadedSourceKey == sourceKey) return;
@@ -463,6 +486,45 @@ public static class UsageParsers
             return latest > 0 ? DateTimeOffset.FromUnixTimeMilliseconds((long)latest) : DateTimeOffset.MinValue;
         }
         catch { return DateTimeOffset.MinValue; }
+    }
+
+    // Weekly ("sd") samples from plan-usage-history.json, without reset tagging.
+    public static List<(DateTimeOffset At, double Used)> ReadClaudeDesktopWeeklySamples(string json)
+    {
+        var result = new List<(DateTimeOffset, double)>();
+        try
+        {
+            using var doc = JsonDocument.Parse(json);
+            if (!doc.RootElement.TryGetProperty("samples", out var samples) || samples.ValueKind != JsonValueKind.Array)
+                return result;
+            foreach (var sample in samples.EnumerateArray())
+            {
+                if (sample.TryGetProperty("u", out var u) && u.ValueKind == JsonValueKind.Object
+                    && TryNumber(u, "sd", out var used) && TryNumber(sample, "t", out var t))
+                {
+                    try { result.Add((DateTimeOffset.FromUnixTimeMilliseconds((long)t), used)); } catch { }
+                }
+            }
+        }
+        catch { }
+        return result;
+    }
+
+    // Burn pace for a Claude reading that has an exact weekly reset (cached usage
+    // response or Claude Code statusline). Earlier readings in the same weekly
+    // window come from Claude Desktop's history and from readings seen this run.
+    internal static ServiceUsage WithClaudePace(ServiceUsage usage, DateTimeOffset observedAt,
+        IEnumerable<(DateTimeOffset At, double Used)> earlier)
+    {
+        if (usage.BurnPaceRatio is not null || usage.UsedPercent is not { } used || usage.ResetsAt is not { } resetsAt)
+            return usage;
+        var windowStart = resetsAt - (usage.WeeklyWindow ?? TimeSpan.FromDays(7));
+        var samples = earlier
+            .Where(s => s.At.LocalDateTime >= windowStart && s.At < observedAt)
+            .Select(s => new UsageSample(s.At, s.Used, resetsAt))
+            .Append(new UsageSample(observedAt, used, resetsAt));
+        var pace = UsagePace.Estimate(samples, usage with { WeeklyWindow = usage.WeeklyWindow ?? TimeSpan.FromDays(7) });
+        return usage with { BurnRatePercentPerHour = pace?.BurnRatePercentPerHour, BurnPaceRatio = pace?.BurnPaceRatio };
     }
 
     public static bool TryParseCodexWeekly(string json, out ServiceUsage usage)

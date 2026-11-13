@@ -521,4 +521,27 @@ public class UsageParserTests
         string headers = "date:Fri, 13 Nov 2026 04:53:30 GMT\0content-encoding:zstd\0";
         Assert.False(ClaudeCacheReader.TryParseCachedResponse(headers, new byte[] { 0x28, 0xb5, 0x2f, 0xfd }, out _, out _));
     }
+
+    [Fact]
+    public void Cached_claude_reading_gets_a_burn_pace_from_earlier_samples_in_its_window()
+    {
+        var now = DateTimeOffset.Now;
+        var usage = new ServiceUsage("Claude", 10, DateTime.Now.AddDays(3.5), "cached", WeeklyWindow: TimeSpan.FromDays(7));
+        var earlier = new List<(DateTimeOffset At, double Used)>
+        {
+            (now.AddDays(-5), 0),      // previous weekly window: ignored
+            (now.AddHours(-12), 4),
+        };
+        var paced = UsageParsers.WithClaudePace(usage, now, earlier);
+        Assert.NotNull(paced.BurnPaceRatio);
+        Assert.Equal(0.5, paced.BurnRatePercentPerHour!.Value, 2); // 6% over 12h
+    }
+
+    [Fact]
+    public void Single_cached_claude_reading_still_gets_a_pace_since_the_weekly_reset()
+    {
+        var usage = new ServiceUsage("Claude", 8, DateTime.Now.AddDays(6), "cached", WeeklyWindow: TimeSpan.FromDays(7));
+        var paced = UsageParsers.WithClaudePace(usage, DateTimeOffset.Now, Array.Empty<(DateTimeOffset, double)>());
+        Assert.NotNull(paced.BurnPaceRatio);
+    }
 }
